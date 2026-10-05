@@ -30,6 +30,7 @@ function Cache.inspect(book)
     }
     local dir = Paths.bookWorkDir(book.stable_id, book.source_id)
     local work_attr = lfs.symlinkattributes(dir)
+    local book_attr
     local stack = { dir }
     while #stack > 0 do
         local path = table.remove(stack)
@@ -40,16 +41,18 @@ function Cache.inspect(book)
             end
         elseif attr and attr.mode == "file" then
             entry.bytes = entry.bytes + attr.size
+            if path == book.path then book_attr = attr end
         end
     end
-    local cover = lfs.symlinkattributes(Paths.coverPath(book.stable_id, book.source_id))
+    local cover_path = Paths.coverPath(book.stable_id, book.source_id)
+    local cover = lfs.symlinkattributes(cover_path)
     if cover and cover.mode == "file" then entry.bytes = entry.bytes + cover.size end
     local path = book.path
     local root = Paths.cacheDir() .. "/"
     if type(path) == "string" and path:sub(1, #root) == root
         and path:sub(1, #dir + 1) ~= dir .. "/" then
-        local attr = lfs.symlinkattributes(path)
-        if attr and attr.mode == "file" then entry.bytes = entry.bytes + attr.size end
+        book_attr = lfs.symlinkattributes(path)
+        if book_attr and book_attr.mode == "file" then entry.bytes = entry.bytes + book_attr.size end
     end
     local ok, toc = pcall(require("json").decode, book.toc or "")
     if ok and type(toc) == "table" then
@@ -75,6 +78,11 @@ function Cache.inspect(book)
         end
     end
     entry.missing = entry.total - entry.available
+    entry.has_content = entry.available > 0
+    if not entry.has_content and book_attr and book_attr.mode == "file" and book_attr.size > 0
+        and not path:match("%.part$") and path ~= cover_path then
+        entry.has_content = not path:match("%.html$") or Text.hasRemoteImageSrcInFile(path) ~= nil
+    end
     return entry
 end
 
@@ -85,7 +93,7 @@ function Cache.inventoryAsync(cb)
         local entries = {}
         for _, book in ipairs(books) do
             local entry = Cache.inspect(book)
-            if entry and entry.bytes > 0 then entries[#entries + 1] = entry end
+            if entry and entry.has_content then entries[#entries + 1] = entry end
         end
         return entries
     end, {
