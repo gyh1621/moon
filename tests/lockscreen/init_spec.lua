@@ -265,6 +265,17 @@ local ok_run, err_run = pcall(function()
     Stubs.flush()
     Assert.is_true(render_writes > 0)
 
+    -- ReaderUI 和 FileManager 都会重建插件；启动生成只能在本进程第一次发生。
+    render_writes = 0
+    LockScreen.onCreate()
+    Stubs.flush()
+    Assert.eq(render_writes, 1, "冷启动仍生成一次锁屏")
+    LockScreen.onCreate()
+    Stubs.flush()
+    Assert.eq(render_writes, 1, "切章重建插件不得再阻塞 UI 生成锁屏")
+    LockScreen.onPause()
+    Assert.eq(render_writes, 2, "休眠仍强制生成最新阅读锁屏")
+
     -- myrl 主体触网；日报不再是独立背景。
     Settings.setBackgroundMode("bing")
     Settings.setComponent("myrl")

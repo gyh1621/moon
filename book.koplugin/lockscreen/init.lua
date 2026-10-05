@@ -14,6 +14,7 @@ local logger = require("utils.log")
 local M = {}
 local job
 local job_revision
+local initialized = false
 
 --- 生成并接管锁屏图；非强制刷新不打断配置仍有效的在飞生成，缓存命中直接复用。
 --- 在飞任务的配置已过期时它的结果注定被丢弃，必须让位给新请求，否则无人重跑。
@@ -89,8 +90,10 @@ function M.onResume()
     })
 end
 
---- 插件启动：先用有效缓存立刻接管，再后台强制重生成一次。
+--- 本进程首次启动：先用有效缓存接管，再调度一次强制生成。
 function M.onCreate()
+    if initialized then return end
+    initialized = true
     if not Settings.isCompose() then
         logger.dbg("book.lockscreen onCreate skipped", "mode_disabled")
         return
