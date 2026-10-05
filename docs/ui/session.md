@@ -34,6 +34,8 @@ sequenceDiagram
 
 切章导航带 `skip_pull`，避免每章都拉云端。
 
+章节准备超过 250 ms 才显示切换提示；缓存命中或快速完成时取消延迟提示。目标章在 `ReaderReady` 内同步定位，目录跳转/向后翻章到章首，向前翻章到上一章末页；分页模式已经在目标页时不重复跳转。切章不额外强制重绘，保留 KOReader 原有的图片与定期全刷策略。
+
 已读：`fraction>=1` 或 EndOfBook → `markReadComplete`；可选设置 `auto_mark_read_at_99` 在 99% 且 `read_state==0` 时自动已读。安装自定义 EndOfBook，屏蔽 KOReader 默认结束菜单。
 
 `.moon` 内无法识别的文件：ConfirmBox「关闭文档 / 仍要阅读」。
