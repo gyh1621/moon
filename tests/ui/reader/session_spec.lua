@@ -169,6 +169,7 @@ end
 
 package.preload["book.progress"] = function()
     return {
+        clampFraction = function(value) return math.max(0, math.min(1, value)) end,
         save = function(_, cb) if cb then cb(true) end end,
         pull = function(snapshot)
             calls.progress[#calls.progress + 1] = { "pull", snapshot and snapshot.identity }
@@ -270,6 +271,7 @@ local function mkPlugin(path)
             getCurrentPage = function()
                 return 5
             end,
+            handleEvent = function() end,
         },
         emitToSource = function(_, ev, payload, source)
             emitted[#emitted + 1] = { ev = ev, payload = payload, source = source }
@@ -354,6 +356,17 @@ do
     local toc = { { idx = 1 }, { idx = 2 } }
     local UIManager = require("ui/uimanager")
     local old_show, old_close = UIManager.show, UIManager.close
+    local old_schedule, old_unschedule = UIManager.scheduleIn, UIManager.unschedule
+    local old_repaint = UIManager.forceRePaint
+    local repaints = 0
+    UIManager.forceRePaint = function() repaints = repaints + 1 end
+    local timers = {}
+    UIManager.scheduleIn = function(_, delay, callback)
+        timers[callback] = delay
+    end
+    UIManager.unschedule = function(_, callback)
+        timers[callback] = nil
+    end
     local transition_notice, transition_closes = nil, 0
     UIManager.show = function(self, widget)
         if widget and widget.text == "正在切换章节，请稍候…" then
@@ -393,14 +406,16 @@ do
     Session.onReaderReady(plugin)
     Assert.eq(countPulls(), pulls_before + 1, "冷打开只 pull 一次")
     Assert.is_true(Session.gotoChapter(2))
+    Assert.is_nil(transition_notice, "快速切章不应立即显示提示")
     Stubs.flush()
     Assert.eq(calls.switched_path, "/cache/2.html")
-    Assert.not_nil(transition_notice)
-    Assert.eq(transition_closes, 0, "新 ReaderReady 前切章提示继续显示")
+    Assert.eq(repaints, 0, "缓存切章不应强制绘制旧章节")
+    Assert.is_nil(transition_notice, "缓存准备完成不得闪现提示")
+    Assert.is_nil(next(timers), "缓存准备完成取消延迟提示")
     plugin.ui.document.file = "/cache/2.html"
     local toc_reads_before_switch_ready = toc_reads
     Session.onReaderReady(plugin)
-    Assert.eq(transition_closes, 1, "目标章节 ReaderReady 后必须关闭切章提示")
+    Assert.eq(transition_closes, 0, "快速切章没有提示可关闭")
     Assert.eq(countPulls(), pulls_before + 1, "连续切章不应再 pull")
     Assert.eq(toc_reads, toc_reads_before_switch_ready, "连续切章复用已加载目录")
     Assert.len(Session.toc(), 2)
@@ -412,16 +427,115 @@ do
     Stubs.flush()
     Assert.eq(calls.switched_path, "/cache/1.html")
     plugin.ui.document.file = "/cache/1.html"
+    events = {}
     Session.onReaderReady(plugin)
-    Stubs.flush()
     local ev = events[#events]
+    Assert.not_nil(ev, "ReaderReady 返回前必须定位，避免首次绘制旧进度")
     Assert.eq(ev.handler, "onGotoPage")
     Assert.eq(ev.args[1], 1)
+
+    local current_page = 1
+    plugin.ui.getCurrentPage = function() return current_page end
+    plugin.ui.view = { view_mode = "page" }
+    events = {}
+    Assert.is_true(Session.gotoChapter(2))
+    Stubs.flush()
+    plugin.ui.document.file = "/cache/2.html"
+    Session.onReaderReady(plugin)
+    Assert.len(events, 0, "目标已经在章首，不重复发送 PageUpdate 触发全刷")
+
+    Assert.is_true(Session.onChapterBoundary(-1))
+    Stubs.flush()
+    plugin.ui.document.file = "/cache/1.html"
+    Session.onReaderReady(plugin)
+    Assert.eq(events[#events].args[1], 200, "上一章边界在首次绘制前定位章尾")
+    local positioned_events = #events
+    Stubs.flush()
+    Assert.len(events, positioned_events, "首次定位后没有延迟的重复定位")
+
+    Assert.is_true(Session.gotoChapter(2, { xpointer = "/body/p[12]" }))
+    Stubs.flush()
+    plugin.ui.document.file = "/cache/2.html"
+    Session.onReaderReady(plugin)
+    Assert.eq(events[#events].handler, "onGotoXPointer")
+    Assert.eq(events[#events].args[1], "/body/p[12]")
+
+    Assert.is_true(Session.gotoChapter(1, { within = 0.5 }))
+    Stubs.flush()
+    plugin.ui.document.file = "/cache/1.html"
+    Session.onReaderReady(plugin)
+    Assert.eq(events[#events].args[1], 100, "比例跳转仍按目标章页数定位")
+
+    local proportion, positioned_xpointer
+    plugin.ui.document.getXPointerFromProportion = function(_, value)
+        proportion = value
+        return "/body/p[90]"
+    end
+    plugin.ui.rolling = { onGotoXPointer = function(_, xp) positioned_xpointer = xp end }
+    Assert.is_true(Session.gotoChapter(2, { within = 0.75 }))
+    Stubs.flush()
+    plugin.ui.document.file = "/cache/2.html"
+    Session.onReaderReady(plugin)
+    Assert.eq(proportion, 0.75)
+    Assert.eq(positioned_xpointer, "/body/p[90]", "比例跳转优先使用准确的 xpointer")
+    plugin.ui.document.getXPointerFromProportion = nil
+    plugin.ui.rolling = nil
+
+    plugin.ui.view.view_mode = "scroll"
+    events = {}
+    Assert.is_true(Session.gotoChapter(1))
+    Stubs.flush()
+    plugin.ui.document.file = "/cache/1.html"
+    Session.onReaderReady(plugin)
+    Assert.eq(events[#events].args[1], 1, "滚动模式同一页内仍需回到页首")
+
+    -- 下载慢时才显示提示，并一直保留到新文档就绪。
+    local complete
+    source.openBookAsync = function(_, _, _, cb)
+        complete = cb
+        return { cancel = function() end }
+    end
+    Assert.is_true(Session.gotoChapter(2))
+    local timer, delay = next(timers)
+    Assert.eq(delay, 0.25)
+    timers[timer] = nil
+    timer()
+    Assert.not_nil(transition_notice, "慢请求在延迟后显示提示")
+    complete("/cache/2.html")
+    Stubs.flush()
+    Assert.eq(transition_closes, 0, "已显示的提示保留到 ReaderReady")
+    plugin.ui.document.file = "/cache/2.html"
+    Session.onReaderReady(plugin)
+    Assert.eq(transition_closes, 1)
+
+    -- 失败或退出后，即使已入队的计时回调迟到，也不能再显示提示。
+    transition_notice = nil
+    Assert.is_true(Session.gotoChapter(1))
+    timer = next(timers)
+    complete(nil, "download failed")
+    Assert.is_nil(next(timers))
+    timer()
+    Assert.is_nil(transition_notice)
+    Assert.is_true(Session.gotoChapter(1))
+    timer = next(timers)
+    plugin.ui.document.file = "/cache/1.html"
+    Session.onReaderReady(plugin)
+    Assert.is_nil(next(timers), "手动打开同书其他章节也取消延迟提示")
+    timer()
+    Assert.is_nil(transition_notice)
+    Assert.is_true(Session.gotoChapter(2))
+    timer = next(timers)
+    Session.onCloseDocument(plugin)
+    Assert.is_nil(next(timers))
+    timer()
+    Assert.is_nil(transition_notice)
     plugin.ui.handleEvent = nil
 
     Session.onCloseDocument(plugin)
     resolved_source = nil
     UIManager.show, UIManager.close = old_show, old_close
+    UIManager.scheduleIn, UIManager.unschedule = old_schedule, old_unschedule
+    UIManager.forceRePaint = old_repaint
 end
 
 -- .moon 外文档统一归 local，并按 local 属主源分发

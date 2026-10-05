@@ -19,26 +19,43 @@ local _ = require("gettext")
 local Chapter = {}
 
 local PREFETCH_AHEAD = 3
+local TRANSITION_NOTICE_DELAY = 0.25
 
 ---@type ReaderChapterSession|nil
 local chapter_session
 ---@type { cancel: fun() }|nil
 local prefetch_job
 local transition_notice
+local transition_notice_timer
+
+local function cancelTransitionNoticeTimer()
+    if transition_notice_timer then
+        require("ui/uimanager"):unschedule(transition_notice_timer)
+        transition_notice_timer = nil
+    end
+end
 
 local function closeTransitionNotice()
+    cancelTransitionNoticeTimer()
     if transition_notice then
         require("ui/uimanager"):close(transition_notice)
         transition_notice = nil
     end
 end
 
-local function showTransitionNotice()
+local function scheduleTransitionNotice(chapter)
     closeTransitionNotice()
-    transition_notice = require("ui/widget/infomessage"):new{
-        text = _("正在切换章节，请稍候…"),
-    }
-    require("ui/uimanager"):show(transition_notice)
+    local timer
+    timer = function()
+        if transition_notice_timer ~= timer or chapter_session ~= chapter then return end
+        transition_notice_timer = nil
+        transition_notice = require("ui/widget/infomessage"):new{
+            text = _("正在切换章节，请稍候…"),
+        }
+        require("ui/uimanager"):show(transition_notice)
+    end
+    transition_notice_timer = timer
+    require("ui/uimanager"):scheduleIn(TRANSITION_NOTICE_DELAY, timer)
 end
 
 --- 取消在途的后续章预取任务。
@@ -131,46 +148,45 @@ local function applyChapterTarget(chapter, ui)
     if target.within == nil and target.direction == nil and target.xpointer == nil then return end
     local within, direction = target.within, target.direction
 
-    require("ui/uimanager"):nextTick(function()
-        if chapter_session ~= chapter or ui.document.file ~= target.path then return end
-        if target.xpointer then
-            ui:handleEvent(require("ui/event"):new("GotoXPointer", target.xpointer, target.xpointer))
-            return
+    if chapter_session ~= chapter or ui.document.file ~= target.path then return end
+    if target.xpointer then
+        ui:handleEvent(require("ui/event"):new("GotoXPointer", target.xpointer, target.xpointer))
+        return
+    end
+    local page
+    if within ~= nil then
+        within = require("book.progress").clampFraction(within)
+        if ui.document.getXPointerFromProportion then
+            local xptr = ui.document:getXPointerFromProportion(within)
+            if xptr and ui.rolling then
+                ui.rolling:onGotoXPointer(xptr)
+                return
+            elseif xptr and ui.link then
+                ui.link:onGotoXPointer(xptr)
+                return
+            end
         end
-        local page
-        if within ~= nil then
-            within = require("book.progress").clampFraction(within)
-            if ui.document.getXPointerFromProportion then
-                local xptr = ui.document:getXPointerFromProportion(within)
-                if xptr and ui.rolling then
-                    ui.rolling:onGotoXPointer(xptr)
-                    return
-                elseif xptr and ui.link then
-                    ui.link:onGotoXPointer(xptr)
-                    return
-                end
-            end
-            if ui.document.getPageCount then
-                local total = ui.document:getPageCount() or 1
-                page = math.max(1, math.min(total, math.floor(within * total + 0.5)))
-            end
-        elseif direction == "prev" then
-            local total
-            if ui.document.getPageCount then
-                total = ui.document:getPageCount()
-            end
-            if total and total > 1 then
-                page = total
-            end
-        elseif direction == "next" then
-            page = 1
+        if ui.document.getPageCount then
+            local total = ui.document:getPageCount() or 1
+            page = math.max(1, math.min(total, math.floor(within * total + 0.5)))
         end
-        if not page then return end
-        if ui.link then
-            ui.link:addCurrentLocationToStack()
+    elseif direction == "prev" then
+        local total
+        if ui.document.getPageCount then
+            total = ui.document:getPageCount()
         end
-        ui:handleEvent(require("ui/event"):new("GotoPage", page))
-    end)
+        if total and total > 1 then
+            page = total
+        end
+    elseif direction == "next" then
+        page = 1
+    end
+    if not page then return end
+    if ui.view and ui.view.view_mode == "page" and ui:getCurrentPage() == page then return end
+    if ui.link then
+        ui.link:addCurrentLocationToStack()
+    end
+    ui:handleEvent(require("ui/event"):new("GotoPage", page))
 end
 
 ---@param view table|nil
@@ -260,10 +276,9 @@ function Chapter.onReaderReady(plugin, session)
     if target and not nav_target then
         chapter.target = nil
         chapter.switching = false
-        closeTransitionNotice()
     end
     session.chapter = chapter
-    if nav_target then closeTransitionNotice() end
+    closeTransitionNotice()
     applyChapterTarget(chapter, ui)
     wrapChapterReaderUi(ui)
     Snapshot.refresh(session)
@@ -331,7 +346,7 @@ end
 ---@param opts { within: number|nil, direction: "prev"|"next"|nil, xpointer: string|nil }
 local function requestChapter(chapter, idx, opts)
     cancelPrefetch()
-    showTransitionNotice()
+    scheduleTransitionNotice(chapter)
     local identity = chapter.identity
     if not identity then return end
     local source = identity.source
@@ -339,6 +354,7 @@ local function requestChapter(chapter, idx, opts)
     chapter.request = source:openBookAsync(identity, { chapter_idx = idx }, function(path, err)
         chapter.request = nil
         if chapter_session ~= chapter then return end
+        cancelTransitionNoticeTimer()
         if not path then
             failRequest(chapter, err or _("章节打开失败"))
             return
@@ -356,12 +372,6 @@ local function requestChapter(chapter, idx, opts)
 
         local ReaderUI = require("apps/reader/readerui")
         local UIManager = require("ui/uimanager")
-        -- 先把提示实际刷到屏幕，再让出一个 tick 启动 KOReader 的阻塞式 HTML 打开。
-        -- 直接调用 switchDocument 会立刻被 ReaderUI 的 invisible opening message 覆盖，
-        -- 用户看不到“正在切换”提示。
-        if UIManager.forceRePaint then
-            UIManager:forceRePaint()
-        end
         UIManager:nextTick(function()
             if chapter_session ~= chapter then return end
             chapter.switching = true
