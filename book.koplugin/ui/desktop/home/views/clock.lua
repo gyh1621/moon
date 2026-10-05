@@ -1,5 +1,5 @@
 --[[--
-主体：时钟。布局跟天气同构：居中大时间 + 下方两行辅文（日期 / 农历节日）。
+主体：时钟。无衬线时间 + 细分隔线 + 星期、日期、农历节日。
 
 @module koplugin.book.ui.desktop.home.views.clock
 --]]
@@ -8,6 +8,10 @@ local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
+local HorizontalGroup = require("ui/widget/horizontalgroup")
+local HorizontalSpan = require("ui/widget/horizontalspan")
+local LeftContainer = require("ui/widget/container/leftcontainer")
+local LineWidget = require("ui/widget/linewidget")
 local Myrl = require("online.myrl")
 local TextWidget = require("ui/widget/textwidget")
 local UI = require("ui.components.bookui")
@@ -19,11 +23,14 @@ local _ = require("gettext")
 local GAP = 4
 local SUB_H = 18
 local DOW = { _("日"), _("一"), _("二"), _("三"), _("四"), _("五"), _("六") }
+local clock_font_registered = false
 
 ---@class BookHomeClock : BookHomeComponent
 ---@field desktop BookDesktop|nil
 ---@field region table|nil
 ---@field time_widget table|nil
+---@field weekday table|nil
+---@field content_group table|nil
 ---@field detail table|nil
 ---@field extra table|nil
 ---@field _tick fun()|nil
@@ -47,11 +54,14 @@ function M:heightRange()
     return { height = M.contentHeight() }
 end
 
---- 组合当前日期与本地化星期文案。
+--- 当前日期。
 ---@return string
 local function dateLine()
-    return os.date("%Y-%m-%d") .. " " .. _("星期")
-        .. DOW[(tonumber(os.date("%w")) or 0) + 1]
+    return os.date("%Y.%m.%d")
+end
+
+local function weekdayLine()
+    return _("星期") .. DOW[(tonumber(os.date("%w")) or 0) + 1]
 end
 
 --- 组合农历与节日名称；两项均缺失时显示占位符。
@@ -129,25 +139,84 @@ function M.stack(view, hero, detail, extra)
         }
 end
 
---- 按指定宽高构建时间、日期和农历节日三行内容。
+--- 按指定宽高构建左右排版；时间天气的窄栏缩小时间与间距。
 ---@return table
 function M:createWidget()
+    if not clock_font_registered then
+        local FontList = require("fontlist")
+        FontList:getFontList()
+        table.insert(FontList.fontlist, 1, UI.pluginRoot() .. "fonts/NotoSans-Light.ttf")
+        clock_font_registered = true
+    end
+    local w, h = self.opts.width, self.opts.height
+    local compact = w < UI.sz(300)
+    local gap = UI.sz(compact and 12 or 20)
+    local rule_w = UI.line()
     self.time_widget = TextWidget:new{
         text = os.date("%H:%M"),
-        face = UI.face("cfont", 36),
+        face = UI.face("NotoSans-Light.ttf", compact and 30 or 48),
+        padding = 0,
+        max_width = math.floor(w * 0.55),
         fgcolor = Blitbuffer.COLOR_BLACK,
     }
-    return M.stack(self, self.time_widget, dateLine(), lunarLine(self.data))
+    local calendar_w = math.max(1, math.min(UI.sz(140), w - self.time_widget:getSize().w - gap * 2 - rule_w))
+    self.weekday = TextWidget:new{
+        text = weekdayLine(),
+        face = UI.face("cfont", compact and 14 or 16),
+        padding = 0,
+        max_width = calendar_w,
+        fgcolor = Blitbuffer.COLOR_BLACK,
+    }
+    self.detail = TextWidget:new{
+        text = dateLine(),
+        face = UI.face("xx_smallinfofont", compact and 11 or 13),
+        padding = 0,
+        max_width = calendar_w,
+        fgcolor = UI.muted(),
+    }
+    self.extra = TextWidget:new{
+        text = lunarLine(self.data),
+        face = UI.face("xx_smallinfofont", compact and 10 or 12),
+        padding = 0,
+        max_width = calendar_w,
+        fgcolor = UI.dim(),
+    }
+    local row_h = UI.sz(18)
+    local calendar = VerticalGroup:new{
+        align = "left",
+        LeftContainer:new{ dimen = Geom:new{ w = calendar_w, h = UI.sz(23) }, self.weekday },
+        VerticalSpan:new{ width = UI.sz(7) },
+        LeftContainer:new{ dimen = Geom:new{ w = calendar_w, h = row_h }, self.detail },
+        VerticalSpan:new{ width = UI.sz(3) },
+        LeftContainer:new{ dimen = Geom:new{ w = calendar_w, h = row_h }, self.extra },
+    }
+    self.content_group = HorizontalGroup:new{
+        align = "center",
+        self.time_widget,
+        HorizontalSpan:new{ width = gap },
+        LineWidget:new{ dimen = Geom:new{ w = rule_w, h = UI.sz(66) }, background = UI.dim() },
+        HorizontalSpan:new{ width = gap },
+        calendar,
+    }
+    self.desktop = self.ctx.desktop
+    self.region = Geom:new{ x = 0, y = self.opts.y or 0, w = w, h = h }
+    return CenterContainer:new{
+        dimen = Geom:new{ w = w, h = h },
+        self.content_group,
+    }
 end
 
 --- 更新当前时间、日期及农历节日文字；文字全未变时不刷新，墨水屏每次 dirty 都是一次真实刷新。
 function M:paint()
     if not self.time_widget then return end
-    local time, date, lunar = os.date("%H:%M"), dateLine(), lunarLine(self.data)
-    if self.time_widget.text == time and self.detail.text == date and self.extra.text == lunar then return end
+    local time, weekday, date, lunar = os.date("%H:%M"), weekdayLine(), dateLine(), lunarLine(self.data)
+    if self.time_widget.text == time and self.weekday.text == weekday
+        and self.detail.text == date and self.extra.text == lunar then return end
     self.time_widget:setText(time)
+    self.weekday:setText(weekday)
     self.detail:setText(date)
     self.extra:setText(lunar)
+    self.content_group:resetLayout()
     self:dirty("content")
 end
 
@@ -198,6 +267,8 @@ end
 function M:onDestroy()
     stopTick(self)
     self.time_widget = nil
+    self.weekday = nil
+    self.content_group = nil
     self.detail = nil
     self.extra = nil
     self.region = nil
