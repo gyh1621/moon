@@ -43,16 +43,21 @@ local function closeTransitionNotice()
     end
 end
 
+local function showTransitionNotice()
+    cancelTransitionNoticeTimer()
+    if transition_notice then return end
+    transition_notice = require("ui/widget/infomessage"):new{
+        text = _("正在切换章节，请稍候…"),
+    }
+    require("ui/uimanager"):show(transition_notice)
+end
+
 local function scheduleTransitionNotice(chapter)
     closeTransitionNotice()
     local timer
     timer = function()
         if transition_notice_timer ~= timer or chapter_session ~= chapter then return end
-        transition_notice_timer = nil
-        transition_notice = require("ui/widget/infomessage"):new{
-            text = _("正在切换章节，请稍候…"),
-        }
-        require("ui/uimanager"):show(transition_notice)
+        showTransitionNotice()
     end
     transition_notice_timer = timer
     require("ui/uimanager"):scheduleIn(TRANSITION_NOTICE_DELAY, timer)
@@ -192,14 +197,20 @@ end
 ---@param view table|nil
 ---@param position fun(view: table): number
 ---@param atStart fun(before: number, after: number): boolean
-local function wrapBoundary(view, position, atStart)
+---@param atBoundary fun(view: table, diff: number): boolean|nil
+local function wrapBoundary(view, position, atStart, atBoundary)
     if not view then return end
     local original = view.onGotoViewRel
     if type(original) ~= "function" then return end
-    view.onGotoViewRel = function(self, diff)
-        if not chapter_session then return original(self, diff) end
+    view.onGotoViewRel = function(self, diff, ...)
+        if not chapter_session then return original(self, diff, ...) end
+        local reader_ui = self.ui
+        if atBoundary and diff ~= 0 and atBoundary(self, diff)
+            and Chapter.onChapterBoundary(reader_ui._book_chapter_session, diff < 0 and -1 or 1) then
+            return true
+        end
         local before = position(self)
-        local result = original(self, diff)
+        local result = original(self, diff, ...)
         if diff < 0 and atStart(before, position(self)) then
             local reader_ui = self.ui
             if reader_ui then
@@ -211,8 +222,10 @@ local function wrapBoundary(view, position, atStart)
 end
 
 ---@param ui table
-local function wrapChapterReaderUi(ui)
-    if not ui or ui.name ~= "ReaderUI" or ui._book_chapters_wrapped then return end
+local function wrapChapterReaderUi(ui, session)
+    if not ui or ui.name ~= "ReaderUI" then return end
+    ui._book_chapter_session = session
+    if ui._book_chapters_wrapped then return end
     ui._book_chapters_wrapped = true
     wrapBoundary(ui.rolling, function(view)
         if view.view and view.view.view_mode == "scroll" then
@@ -221,6 +234,24 @@ local function wrapChapterReaderUi(ui)
         return view.current_page
     end, function(before, after)
         return before == after
+    end, function(view, diff)
+        local document = view.ui.document
+        if view.view.view_mode == "scroll" then
+            if diff < 0 then return view.current_pos <= 0 end
+            local max_pos = document.info.doc_height - view.ui.dimen.h + view.view.footer:getHeight()
+            return view.current_pos >= max_pos
+        end
+        if document:hasHiddenFlows() then
+            if diff < 0 then return document:getPrevPage(view.current_page) <= 0 end
+            local page = view.current_page
+            for _ = 1, document:getVisiblePageNumberCount() do
+                page = document:getNextPage(page)
+                if page <= 0 then return true end
+            end
+            return false
+        end
+        return diff < 0 and view.current_page <= 1
+            or diff > 0 and view.current_page + document:getVisiblePageNumberCount() > document:getPageCount()
     end)
     wrapBoundary(ui.paging, function(view)
         return view.getTopPage and view:getTopPage() or view.current_page
@@ -280,7 +311,7 @@ function Chapter.onReaderReady(plugin, session)
     session.chapter = chapter
     closeTransitionNotice()
     applyChapterTarget(chapter, ui)
-    wrapChapterReaderUi(ui)
+    wrapChapterReaderUi(ui, session)
     Snapshot.refresh(session)
     if not nav_target then
         require("book.progress").applyLocalPending(session)
@@ -354,7 +385,6 @@ local function requestChapter(chapter, idx, opts)
     chapter.request = source:openBookAsync(identity, { chapter_idx = idx }, function(path, err)
         chapter.request = nil
         if chapter_session ~= chapter then return end
-        cancelTransitionNoticeTimer()
         if not path then
             failRequest(chapter, err or _("章节打开失败"))
             return
@@ -372,7 +402,9 @@ local function requestChapter(chapter, idx, opts)
 
         local ReaderUI = require("apps/reader/readerui")
         local UIManager = require("ui/uimanager")
-        UIManager:nextTick(function()
+        -- 原生打开会阻塞 UI；先绘制提示，不能指望计时器在渲染中执行。
+        showTransitionNotice()
+        UIManager:tickAfterNext(function()
             if chapter_session ~= chapter then return end
             chapter.switching = true
             local ok, switch_err = pcall(function()

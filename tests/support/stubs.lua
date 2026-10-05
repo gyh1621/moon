@@ -369,6 +369,9 @@ local function installUIManager()
         function UIManager:nextTick(fn)
             _queue[#_queue + 1] = fn
         end
+        function UIManager:tickAfterNext(fn)
+            self:nextTick(function() self:nextTick(fn) end)
+        end
         function UIManager:scheduleIn(_delay, fn)
             _queue[#_queue + 1] = fn
         end

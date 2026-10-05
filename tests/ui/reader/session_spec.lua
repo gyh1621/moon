@@ -410,12 +410,12 @@ do
     Stubs.flush()
     Assert.eq(calls.switched_path, "/cache/2.html")
     Assert.eq(repaints, 0, "缓存切章不应强制绘制旧章节")
-    Assert.is_nil(transition_notice, "缓存准备完成不得闪现提示")
-    Assert.is_nil(next(timers), "缓存准备完成取消延迟提示")
+    Assert.not_nil(transition_notice, "缓存准备完成后仍须在阻塞的原生打开前显示提示")
+    Assert.is_nil(next(timers), "提示已显示后取消延迟计时")
     plugin.ui.document.file = "/cache/2.html"
     local toc_reads_before_switch_ready = toc_reads
     Session.onReaderReady(plugin)
-    Assert.eq(transition_closes, 0, "快速切章没有提示可关闭")
+    Assert.eq(transition_closes, 1, "原生打开完成后关闭提示")
     Assert.eq(countPulls(), pulls_before + 1, "连续切章不应再 pull")
     Assert.eq(toc_reads, toc_reads_before_switch_ready, "连续切章复用已加载目录")
     Assert.len(Session.toc(), 2)
@@ -496,6 +496,7 @@ do
         return { cancel = function() end }
     end
     Assert.is_true(Session.gotoChapter(2))
+    local closes_before_slow = transition_closes
     local timer, delay = next(timers)
     Assert.eq(delay, 0.25)
     timers[timer] = nil
@@ -503,10 +504,10 @@ do
     Assert.not_nil(transition_notice, "慢请求在延迟后显示提示")
     complete("/cache/2.html")
     Stubs.flush()
-    Assert.eq(transition_closes, 0, "已显示的提示保留到 ReaderReady")
+    Assert.eq(transition_closes, closes_before_slow, "已显示的提示保留到 ReaderReady")
     plugin.ui.document.file = "/cache/2.html"
     Session.onReaderReady(plugin)
-    Assert.eq(transition_closes, 1)
+    Assert.eq(transition_closes, closes_before_slow + 1)
 
     -- 失败或退出后，即使已入队的计时回调迟到，也不能再显示提示。
     transition_notice = nil
@@ -536,6 +537,73 @@ do
     UIManager.show, UIManager.close = old_show, old_close
     UIManager.scheduleIn, UIManager.unschedule = old_schedule, old_unschedule
     UIManager.forceRePaint = old_repaint
+end
+
+-- 原生翻页越界之前处理切章，避免 page 0/末页之后再绘制旧章节。
+do
+    stored_toc.chapters = { { idx = 1 }, { idx = 2 } }
+    local opened, native_turns, native_extra = 0, 0, nil
+    resolved_source = {
+        type = "chapter",
+        openBookAsync = function()
+            opened = opened + 1
+            return { cancel = function() end }
+        end,
+    }
+    local function turn(chapter_idx, page, diff, mode, hidden, next_page, visible_pages)
+        local plugin = mkPlugin("/cache/" .. chapter_idx .. ".html")
+        plugin.ui.name = "ReaderUI"
+        plugin.ui.dimen = { h = 600 }
+        plugin.ui.view = { view_mode = mode or "page", footer = { getHeight = function() return 100 end } }
+        plugin.ui.document.info = { doc_height = 1500 }
+        plugin.ui.document.hasHiddenFlows = function() return hidden end
+        plugin.ui.document.getVisiblePageNumberCount = function() return visible_pages or 1 end
+        plugin.ui.document.getNextPage = function(_, page)
+            return type(next_page) == "function" and next_page(page) or next_page
+        end
+        plugin.ui.document.getPrevPage = function() return next_page end
+        plugin.ui.rolling = {
+            ui = plugin.ui, view = plugin.ui.view, current_page = page, current_pos = page,
+            onGotoViewRel = function(self, amount, extra)
+                native_extra = extra
+                native_turns = native_turns + 1
+                self.current_page = math.max(1, math.min(200, self.current_page + amount))
+                self.current_pos = self.current_pos + amount
+                return "native result"
+            end,
+        }
+        Session.onReaderReady(plugin)
+        local before_open, before_native = opened, native_turns
+        local result = plugin.ui.rolling:onGotoViewRel(diff, "native argument")
+        if opened > before_open then
+            Assert.eq(native_turns, before_native, "边界切章不调用原生越界翻页")
+            Assert.is_true(result)
+            plugin.ui.rolling:onGotoViewRel(diff, "native argument")
+            Assert.eq(opened, before_open + 1, "在途期间不重复打开")
+            Assert.eq(native_turns, before_native)
+        else
+            Assert.eq(native_turns, before_native + 1)
+            Assert.eq(result, "native result")
+            Assert.eq(native_extra, "native argument", "普通翻页保留原生参数")
+        end
+        Session.onCloseDocument(plugin)
+        return opened - before_open
+    end
+    Assert.eq(turn(1, 200, 1), 1, "末页直接切到下一章")
+    Assert.eq(turn(1, 199, 1, "page", false, nil, 2), 1, "双页末屏不调用原生越界翻页")
+    Assert.eq(turn(1, 197, 1, "page", false, nil, 2), 0, "双页非末屏继续原生翻页")
+    Assert.eq(turn(1, 199, 1, "page", true, function(page) return page < 200 and 200 or 0 end, 2), 1, "隐藏流双页末屏直接切章")
+    Assert.eq(turn(2, 1, -1), 1, "首屏直接切到上一章")
+    Assert.eq(turn(1, 5, 1), 0, "章内普通翻页仍用原生")
+    Assert.eq(turn(1, 1, -1), 0, "全书开头保留原生行为")
+    Assert.eq(turn(2, 200, 1), 0, "全书末尾保留原生行为")
+    Assert.eq(turn(1, 1000, 1, "scroll"), 1, "滚动模式在实际文档底部切章")
+    Assert.eq(turn(2, 0, -1, "scroll"), 1)
+    Assert.eq(turn(1, 900, 1, "scroll"), 0)
+    Assert.eq(turn(1, 198, 1, "page", true, 0), 1, "隐藏流按可见末页判断")
+    Assert.eq(turn(1, 198, 1, "page", true, 199), 0)
+    Assert.eq(turn(2, 3, -1, "page", true, 0), 1, "隐藏流按可见首页判断")
+    resolved_source = nil
 end
 
 -- .moon 外文档统一归 local，并按 local 属主源分发
