@@ -5,6 +5,9 @@
 --]]
 
 local Assert = require("support.assert")
+package.preload["fontlist"] = function()
+    return { fontlist = {}, getFontList = function() end }
+end
 
 local function widget()
     return {
@@ -13,6 +16,7 @@ local function widget()
                 return self.dimen or { w = 100, h = 40 }
             end
             opts.setText = function(self, text) self.text = text end
+            opts.resetLayout = function() end
             return opts
         end,
     }
@@ -20,7 +24,7 @@ end
 for _, name in ipairs({
     "container/centercontainer", "container/framecontainer",
     "horizontalgroup", "horizontalspan", "verticalgroup", "verticalspan",
-    "textwidget",
+    "textwidget", "container/leftcontainer", "linewidget",
 }) do
     package.preload["ui/widget/" .. name] = widget
 end
@@ -30,6 +34,8 @@ package.preload["ui.components.bookui"] = function()
     return {
         sz = function(n) return n end,
         face = function() end,
+        line = function() return 1 end,
+        pluginRoot = function() return "book.koplugin/" end,
         muted = function() return 0 end,
         dim = function() return 0 end,
     }

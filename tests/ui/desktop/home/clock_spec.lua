@@ -18,6 +18,9 @@ end
 package.preload["gettext"] = function()
     return function(s) return s end
 end
+package.preload["fontlist"] = function()
+    return { fontlist = {}, getFontList = function() end }
+end
 package.preload["ffi/blitbuffer"] = function()
     return { COLOR_BLACK = 0 }
 end
@@ -31,6 +34,8 @@ package.preload["ui.components.bookui"] = function()
     return {
         sz = function(n) return n end,
         face = function() end,
+        line = function() return 1 end,
+        pluginRoot = function() return "book.koplugin/" end,
         muted = function() return 1 end,
         dim = function() return 2 end,
     }
@@ -38,6 +43,7 @@ end
 local function containerStub()
     return { new = function(_, opts)
         opts.getSize = function(self) return self.dimen or { w = self.width or 0, h = self.height or 0 } end
+        opts.resetLayout = function() end
         return opts
     end }
 end
@@ -45,6 +51,10 @@ package.preload["ui/widget/container/centercontainer"] = containerStub
 package.preload["ui/widget/container/framecontainer"] = containerStub
 package.preload["ui/widget/verticalgroup"] = containerStub
 package.preload["ui/widget/verticalspan"] = containerStub
+package.preload["ui/widget/horizontalgroup"] = containerStub
+package.preload["ui/widget/horizontalspan"] = containerStub
+package.preload["ui/widget/container/leftcontainer"] = containerStub
+package.preload["ui/widget/linewidget"] = containerStub
 
 local text_widgets = {}
 package.preload["ui/widget/textwidget"] = function()
@@ -52,6 +62,7 @@ package.preload["ui/widget/textwidget"] = function()
         new = function(_, opts)
             local widget = { text = opts.text }
             function widget:setText(text) self.text = text end
+            function widget:getSize() return { w = 100, h = 40 } end
             text_widgets[#text_widgets + 1] = widget
             return widget
         end,
@@ -73,7 +84,7 @@ local now = { time = "10:20", sec = "20", day = "2026-09-10", w = "4" }
 os.date = function(format)
     if format == "%H:%M" then return now.time end
     if format == "%S" then return now.sec end
-    if format == "%Y-%m-%d" then return now.day end
+    if format == "%Y.%m.%d" then return (now.day:gsub("-", ".")) end
     if format == "%w" then return now.w end
     return old_date(format)
 end
@@ -83,13 +94,14 @@ local clock = Clock:new()
 clock.lifecycle.state = "Resume"
 clock:build({ desktop = {} }, { width = 320, height = 96, y = 10 })
 Assert.eq(text_widgets[1].text, "10:20")
-Assert.eq(text_widgets[2].text, "2026-09-10 星期四")
-Assert.eq(text_widgets[3].text, "--")
+Assert.eq(text_widgets[2].text, "星期四")
+Assert.eq(text_widgets[3].text, "2026.09.10")
+Assert.eq(text_widgets[4].text, "--")
 Assert.is_nil(myrl_cb, "build must not fetch")
 clock:onResume()
 Assert.not_nil(myrl_cb)
 myrl_cb({ lunar = "农历七月廿八", holiday = "中秋" })
-Assert.eq(text_widgets[3].text, "农历七月廿八 · 中秋")
+Assert.eq(text_widgets[4].text, "农历七月廿八 · 中秋")
 Assert.is_true(paints >= 1)
 
 -- 同一分钟再次 Resume、缓存返回同内容新表：都不得重复刷新。
@@ -103,6 +115,11 @@ local before = paints
 clock:onResume()
 Assert.eq(text_widgets[1].text, "10:21")
 Assert.is_true(paints > before)
+now.time, now.day, now.w = "00:00", "2026-09-11", "5"
+clock:paint()
+Assert.eq(text_widgets[1].text, "00:00")
+Assert.eq(text_widgets[2].text, "星期五")
+Assert.eq(text_widgets[3].text, "2026.09.11")
 Assert.not_nil(scheduled[clock._tick])
 local tick = clock._tick
 clock:onResume()

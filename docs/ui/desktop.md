@@ -56,6 +56,10 @@ desktop:onEvent("source_changed")
 数据：`home.home_widgets` = `{ id, page, order, height }`。  
 `height`：`default`（内容高）/ `fill`（吃剩余）/ 自定义像素。
 
+时钟使用左右排版：固定的 Noto Sans Light 时间、细分隔线、星期 / 日期 / 农历节日。
+时间天气中的窄栏缩小时间和间距；辅助文案仍使用当前界面字体，过长时省略。
+字库及其 OFL 许可随插件分发在 `fonts/`；分钟计时与农历数据加载保持原有生命周期。
+
 ```text
 新增组件：
   1. ui/desktop/home/views/foo.lua
