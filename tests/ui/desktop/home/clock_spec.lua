@@ -94,14 +94,14 @@ local clock = Clock:new()
 clock.lifecycle.state = "Resume"
 clock:build({ desktop = {} }, { width = 320, height = 96, y = 10 })
 Assert.eq(text_widgets[1].text, "10:20")
-Assert.eq(text_widgets[2].text, "星期四")
+Assert.eq(text_widgets[2].text, "Thursday")
 Assert.eq(text_widgets[3].text, "2026.09.10")
 Assert.eq(text_widgets[4].text, "--")
 Assert.is_nil(myrl_cb, "build must not fetch")
 clock:onResume()
 Assert.not_nil(myrl_cb)
 myrl_cb({ lunar = "农历七月廿八", holiday = "中秋" })
-Assert.eq(text_widgets[4].text, "农历七月廿八 · 中秋")
+Assert.eq(text_widgets[4].text, "农历七月廿八")
 Assert.is_true(paints >= 1)
 
 -- 同一分钟再次 Resume、缓存返回同内容新表：都不得重复刷新。
@@ -109,6 +109,8 @@ local same = paints
 clock:onResume()
 myrl_cb({ lunar = "农历七月廿八", holiday = "中秋" })
 Assert.eq(paints, same)
+myrl_cb({ lunar = "农历七月廿八", holiday = "今天是国庆节" })
+Assert.eq(paints, same, "holiday changes must not refresh the clock")
 
 now.time = "10:21"
 local before = paints
@@ -118,8 +120,18 @@ Assert.is_true(paints > before)
 now.time, now.day, now.w = "00:00", "2026-09-11", "5"
 clock:paint()
 Assert.eq(text_widgets[1].text, "00:00")
-Assert.eq(text_widgets[2].text, "星期五")
+Assert.eq(text_widgets[2].text, "Friday")
 Assert.eq(text_widgets[3].text, "2026.09.11")
+for day, name in ipairs({ "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" }) do
+    now.w = tostring(day - 1)
+    clock:paint()
+    Assert.eq(clock.weekday.text, name, "weekdays must use full English names")
+end
+for _, data in ipairs({ {}, { holiday = "今天是国庆节" }, { lunar = "" }, { lunar = false } }) do
+    clock.data = data
+    clock:paint()
+    Assert.eq(clock.extra.text, "--", "missing lunar date must not fall back to a holiday")
+end
 Assert.not_nil(scheduled[clock._tick])
 local tick = clock._tick
 clock:onResume()

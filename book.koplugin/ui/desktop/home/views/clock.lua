@@ -1,5 +1,5 @@
 --[[--
-主体：时钟。无衬线时间 + 细分隔线 + 星期、日期、农历节日。
+主体：时钟。无衬线时间 + 细分隔线 + 英文星期、日期、农历。
 
 @module koplugin.book.ui.desktop.home.views.clock
 --]]
@@ -22,7 +22,7 @@ local _ = require("gettext")
 
 local GAP = 4
 local SUB_H = 18
-local DOW = { _("日"), _("一"), _("二"), _("三"), _("四"), _("五"), _("六") }
+local DOW = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" }
 local clock_font_registered = false
 
 ---@class BookHomeClock : BookHomeComponent
@@ -61,22 +61,18 @@ local function dateLine()
 end
 
 local function weekdayLine()
-    return _("星期") .. DOW[(tonumber(os.date("%w")) or 0) + 1]
+    return DOW[(tonumber(os.date("%w")) or 0) + 1]
 end
 
---- 组合农历与节日名称；两项均缺失时显示占位符。
----@param data table|nil 日报数据，含 lunar / holiday 文字
+--- 显示农历日期；缺失时显示占位符。
+---@param data table|nil 日报数据，含 lunar 文字
 ---@return string
 local function lunarLine(data)
-    local lunar, holiday = data and data.lunar, data and data.holiday
-    local parts = {}
+    local lunar = data and data.lunar
     if type(lunar) == "string" and lunar ~= "" then
-        parts[#parts + 1] = lunar
+        return lunar
     end
-    if type(holiday) == "string" and holiday ~= "" then
-        parts[#parts + 1] = holiday
-    end
-    return #parts > 0 and table.concat(parts, " · ") or "--"
+    return "--"
 end
 
 --- 取消本实例保存的定时回调并清除句柄。
@@ -206,7 +202,7 @@ function M:createWidget()
     }
 end
 
---- 更新当前时间、日期及农历节日文字；文字全未变时不刷新，墨水屏每次 dirty 都是一次真实刷新。
+--- 更新当前时间、日期及农历文字；文字全未变时不刷新，墨水屏每次 dirty 都是一次真实刷新。
 function M:paint()
     if not self.time_widget then return end
     local time, weekday, date, lunar = os.date("%H:%M"), weekdayLine(), dateLine(), lunarLine(self.data)
@@ -252,7 +248,7 @@ function M:pull()
     end)
 end
 
---- 启动分钟计时器（立即绘制一次）并拉取农历节日。
+--- 启动分钟计时器（立即绘制一次）并拉取农历。
 function M:onResume()
     self:tick()
     self:pull()

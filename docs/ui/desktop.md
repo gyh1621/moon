@@ -56,7 +56,7 @@ desktop:onEvent("source_changed")
 数据：`home.home_widgets` = `{ id, page, order, height }`。  
 `height`：`default`（内容高）/ `fill`（吃剩余）/ 自定义像素。
 
-时钟使用左右排版：固定的 Noto Sans Light 时间、细分隔线、星期 / 日期 / 农历节日。
+时钟使用左右排版：固定的 Noto Sans Light 时间、细分隔线、英文全称星期 / 日期 / 农历日期（不显示节日）。星期不随界面语言切换。
 时间天气中的窄栏缩小时间和间距；辅助文案仍使用当前界面字体，过长时省略。
 字库及其 OFL 许可随插件分发在 `fonts/`；分钟计时与农历数据加载保持原有生命周期。
 
