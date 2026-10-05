@@ -243,6 +243,10 @@ end
 --- 打开指定功能叠层。
 ---@param id string
 function Settings:open(id)
+    if id == "cache" then
+        require("ui.desktop.cache_manager").open(self.desktop)
+        return
+    end
     local spec = self:spec(id)
     if spec then Overlay.open(self.desktop, spec) end
 end
@@ -289,6 +293,10 @@ function Settings:createWidget()
         featureRow(desktop, {
             id = "source_config", icon = "tune", title = _("账号与登录"),
             subtitle = _("书源账号、本地书籍目录"),
+        }),
+        featureRow(desktop, {
+            id = "cache", icon = "download", title = _("缓存与下载"),
+            subtitle = _("后台任务、章节缓存与空间占用"),
         }),
     })
     Overlay.appendSection(packed, card_w, _("桌面"), {

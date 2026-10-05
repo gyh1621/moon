@@ -48,18 +48,24 @@ package.preload["utils.log"] = function()
     }
 end
 
-local purge_ok = true
+local linked_root
+local purged = {}
 package.preload["libs/libkoreader-lfs"] = function()
     return {
         attributes = function(_, field)
             if field == "mode" then return "directory" end
             return nil
         end,
+        symlinkattributes = function(path, field)
+            local mode = path == linked_root and "link" or "directory"
+            return field and mode or { mode = mode }
+        end,
+        dir = function() return function() return nil end end,
     }
 end
 package.preload["ffi/util"] = function()
     return {
-        purgeDir = function() return purge_ok end,
+        purgeDir = function(path) purged[#purged + 1] = path; return true end,
     }
 end
 
@@ -474,12 +480,13 @@ end
 -- ── markDeleted：标删成功、目录 purge 失败仍返回 true ──
 do
     warnings = {}
-    purge_ok = false
+    local original_remove = os.remove
+    os.remove = function() return nil, "fixture removal failure" end
     local ok, leftover = Store.markDeleted("wechat", "gone")
     Assert.is_true(ok)
     Assert.eq(leftover, "partial")
     Assert.eq(warnings[1][1], "book cache purge failed")
-    purge_ok = true
+    os.remove = original_remove
     warnings = {}
 end
 
@@ -534,6 +541,19 @@ do
 end
 
 -- ── touch：章节详情、目录和路径在同一事务登记 ──
+do
+    linked_root = "/cache/wechat/linked"
+    purged = {}
+    local removed = {}
+    local original_remove = os.remove
+    os.remove = function(path) removed[#removed + 1] = path; return true end
+    Assert.is_true(Store.clearCache("wechat", "linked"))
+    Assert.contains(removed, linked_root, "unlink the owned cache root rather than purge its target")
+    Assert.len(purged, 0, "link-following native purge must not be used")
+    os.remove = original_remove
+    linked_root = nil
+end
+
 do
     local identity = { source_id = "moon", stable_id = "s9" }
     local toc = { { idx = 1, title = "一" }, { idx = 2, title = "二" } }

@@ -154,6 +154,13 @@ do
     Assert.is_true(Text.hasRemoteImageSrcInFile(remote_path))
     pcall(os.remove, remote_path)
 
+    local complete_path = Config.dir() .. "/complete-chapter.html"
+    file = assert(io.open(complete_path, "wb"))
+    file:write('<p>Cached text</p><img src="images/local.png">')
+    file:close()
+    Assert.is_false(Text.hasRemoteImageSrcInFile(complete_path))
+    pcall(os.remove, complete_path)
+
     local empty_path = Config.dir() .. "/empty-chapter.html"
     file = assert(io.open(empty_path, "wb"))
     file:close()

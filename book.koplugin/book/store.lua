@@ -86,11 +86,21 @@ end
 local function purgeBookFiles(source_id, stable_id)
     local dir = Paths.bookWorkDir(stable_id, source_id)
     local leftover
-    if require("libs/libkoreader-lfs").attributes(dir, "mode") == "directory" then
-        if not require("ffi/util").purgeDir(dir) then
-            logger.warn("book cache purge failed", dir)
-            leftover = "partial"
+    local lfs = require("libs/libkoreader-lfs")
+    -- Unlink symlinks instead of traversing into documents outside this book's cache.
+    local function purge(path)
+        local mode = lfs.symlinkattributes(path, "mode")
+        if not mode then return true end
+        if mode == "directory" then
+            for name in lfs.dir(path) do
+                if name ~= "." and name ~= ".." and not purge(path .. "/" .. name) then return false end
+            end
         end
+        return os.remove(path)
+    end
+    if not purge(dir) then
+        logger.warn("book cache purge failed", dir)
+        leftover = "partial"
     end
     os.remove(Paths.coverPath(stable_id, source_id))
     return ChapterDB.deleteUnder(dir), leftover

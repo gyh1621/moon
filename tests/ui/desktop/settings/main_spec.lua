@@ -175,6 +175,9 @@ package.preload["ui.desktop.settings.maintenance"] = function()
         closeRow = function() return row("关闭桌面") end,
     }
 end
+package.preload["ui.desktop.cache_manager"] = function()
+    return { open = function() opened = "cache" end }
+end
 
 local previous_settings = _G.G_reader_settings
 _G.G_reader_settings = {
@@ -193,11 +196,12 @@ local desktop = {
 local settings = require("ui.desktop.settings"):new{ desktop = desktop }
 desktop.settings = settings
 settings:updateView()
-Assert.len(built_rows, 21)
+Assert.len(built_rows, 22)
 
 local expected = {
     { title = "书籍来源", id = "sources" },
     { title = "账号与登录", id = "source_config" },
+    { title = "缓存与下载", id = "cache" },
     { title = "界面显示", id = "display" },
     { title = "桌面顶栏", id = "topbar" },
     { title = "锁屏壁纸", id = "lockscreen" },

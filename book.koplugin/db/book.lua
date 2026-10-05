@@ -359,6 +359,22 @@ function BookDB.get(source_id, stable_id)
     ))
 end
 
+--- Include partial/off-shelf caches; original local books are never managed downloads.
+function BookDB.cacheBooks()
+    local result, count = Base.query(
+        "SELECT source_id, stable_id, title, path, cover, toc FROM books WHERE source_id<>? ORDER BY COALESCE(title, ''), stable_id;",
+        "local"
+    )
+    local books = {}
+    for i = 1, count do
+        books[i] = {
+            source_id = result[1][i], stable_id = result[2][i], title = result[3][i],
+            path = result[4][i], cover = result[5][i], toc = result[6][i],
+        }
+    end
+    return books
+end
+
 --- 批量取 books 行，避免统计/列表场景的 N+1 查询。
 ---@param source_id string
 ---@param stable_ids string[]

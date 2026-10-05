@@ -135,7 +135,7 @@ function Overlay:init()
     self.page = self.page or 1
     if Device:hasKeys() then
         self.key_events = {
-            Close = { { Device.input.group.Back } },
+            Back = { { Device.input.group.Back } },
         }
     end
     self:onCreate()
@@ -156,7 +156,7 @@ function Overlay:buildTopBar(w)
     local label = Icon.label{ name = "arrow_back", size = 24, text = _("返回") }
     local back_w = label:getSize().w + UI.sz(12)
     local back = BookInfo.tappable(back_w, bar_h, function()
-        self:onClose()
+        self:onBack()
     end)
     back[1] = LeftContainer:new{
         dimen = Geom:new{ w = back_w, h = bar_h },
@@ -261,6 +261,10 @@ function Overlay:updateView()
         require("ui/uimanager"):setDirty(self, "ui")
     end
     return self[1]
+end
+
+function Overlay:onBack()
+    return self:onClose()
 end
 
 function Overlay:onClose()

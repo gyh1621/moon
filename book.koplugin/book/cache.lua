@@ -18,6 +18,83 @@ local Cache = {}
 
 local BUDGET = 32
 
+--- Inspect owned book files in a worker; original local documents are excluded.
+function Cache.inspect(book)
+    if book.source_id == "local" then return nil end
+    local Text = require("utils.text")
+    local entry = {
+        source_id = book.source_id, stable_id = book.stable_id,
+        title = book.title or book.stable_id, book = book,
+        bytes = 0, total = 0, available = 0, complete = 0, pending_images = 0,
+        chapters = {},
+    }
+    local dir = Paths.bookWorkDir(book.stable_id, book.source_id)
+    local work_attr = lfs.symlinkattributes(dir)
+    local stack = { dir }
+    while #stack > 0 do
+        local path = table.remove(stack)
+        local attr = lfs.symlinkattributes(path)
+        if attr and attr.mode == "directory" then
+            for name in lfs.dir(path) do
+                if name ~= "." and name ~= ".." then stack[#stack + 1] = path .. "/" .. name end
+            end
+        elseif attr and attr.mode == "file" then
+            entry.bytes = entry.bytes + attr.size
+        end
+    end
+    local cover = lfs.symlinkattributes(Paths.coverPath(book.stable_id, book.source_id))
+    if cover and cover.mode == "file" then entry.bytes = entry.bytes + cover.size end
+    local path = book.path
+    local root = Paths.cacheDir() .. "/"
+    if type(path) == "string" and path:sub(1, #root) == root
+        and path:sub(1, #dir + 1) ~= dir .. "/" then
+        local attr = lfs.symlinkattributes(path)
+        if attr and attr.mode == "file" then entry.bytes = entry.bytes + attr.size end
+    end
+    local ok, toc = pcall(require("json").decode, book.toc or "")
+    if ok and type(toc) == "table" then
+        entry.total = #toc
+        for idx, chapter in ipairs(toc) do
+            -- chapterPath creates the work directory; inspection must remain read-only.
+            local chapter_path = dir .. "/" .. tostring(idx) .. ".html"
+            local attr = work_attr and work_attr.mode == "directory" and lfs.symlinkattributes(chapter_path)
+            local remote = attr and attr.mode == "file" and attr.size > 0
+                and Text.hasRemoteImageSrcInFile(chapter_path)
+            local state = "missing"
+            if remote ~= nil and attr and attr.mode == "file" and attr.size > 0 then
+                entry.available = entry.available + 1
+                if remote then
+                    entry.pending_images = entry.pending_images + 1
+                    state = "images"
+                else
+                    entry.complete = entry.complete + 1
+                    state = "cached"
+                end
+            end
+            entry.chapters[idx] = { idx = idx, title = chapter.title or chapter.name or tostring(idx), state = state }
+        end
+    end
+    entry.missing = entry.total - entry.available
+    return entry
+end
+
+--- Read metadata in the main process, then scan files without opening SQLite in the worker.
+function Cache.inventoryAsync(cb)
+    local books = BookDB.cacheBooks()
+    return require("workers.job").run(function()
+        local entries = {}
+        for _, book in ipairs(books) do
+            local entry = Cache.inspect(book)
+            if entry and entry.bytes > 0 then entries[#entries + 1] = entry end
+        end
+        return entries
+    end, {
+        name = "cache.inventory", kind = "light",
+        on_done = function(entries) cb(entries) end,
+        on_failed = function(err) cb(nil, err) end,
+    })
+end
+
 --- 协作式递归遍历：一个 UI 周期最多处理 BUDGET 个目录项，剩余排到下一 tick。
 --- 文件在遇到时回调，目录在其子项全部处理完后回调（自底向上，便于删除）。
 --- visit 返回 false/nil 时立即终止，done(false, err)。

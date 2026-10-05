@@ -110,6 +110,29 @@ local function loadBook(connection)
     return DbBase, BookDB
 end
 
+-- Cache inventory includes metadata for owned online files without filtering shelf membership.
+do
+    local connection, calls = makeConn({
+        resultset = function(sql)
+            if sql:find("SELECT source_id, stable_id, title, path, cover, toc FROM books", 1, true) then
+                return { { "wechat" }, { "partial" }, { "Partial" }, { "/cache/1.html" }, { "cover" }, { "[]" } }, 1
+            end
+        end,
+    })
+    local DbBase, BookDB = loadBook(connection)
+    local rows = BookDB.cacheBooks()
+    Assert.eq(#rows, 1)
+    Assert.eq(rows[1].source_id, "wechat")
+    Assert.eq(rows[1].stable_id, "partial")
+    Assert.eq(rows[1].toc, "[]")
+    local sql = calls[#calls].sql
+    Assert.is_true(sql:find("source_id<>?", 1, true) ~= nil)
+    Assert.eq(calls[#calls].args[1], "local")
+    Assert.is_false(sql:find("deleted=0", 1, true) ~= nil)
+    DbBase.close()
+    clearMods()
+end
+
 -- 旧库没有 cover 列时原地迁移；已有列不得重复 ALTER。
 do
     local connection, calls = makeConn({

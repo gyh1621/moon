@@ -35,8 +35,9 @@ for _, name in ipairs({
         }
     end
 end
+local back_callback
 package.preload["ui.components.bookinfo"] = function()
-    return { tappable = function() return {} end }
+    return { tappable = function(_, _, callback) back_callback = callback; return {} end }
 end
 package.preload["ui.components.icon"] = function()
     return { label = function() return { getSize = function() return { w = 40, h = 20 } end } end }
@@ -96,5 +97,10 @@ desktop.settings_overlay = {
 Overlay.close(desktop)
 Assert.is_true(closed)
 Assert.is_nil(desktop.settings_overlay)
+
+local backed = false
+Overlay.buildTopBar({ spec = { title = "Cache" }, onBack = function() backed = true end }, 600)
+back_callback()
+Assert.is_true(backed, "back navigation can return within an overlay without preventing forced close")
 
 return true

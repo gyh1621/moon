@@ -316,7 +316,8 @@ function Text.hasRemoteImageSrcInFile(path)
         carry = scan:sub(-256)
     end
     file:close()
-    return saw_data and false or nil
+    if saw_data then return false end
+    return nil
 end
 
 --- 抽取多个拼接 HTML 文档里的全部 <body> 内容。
