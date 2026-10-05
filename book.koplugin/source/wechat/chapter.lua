@@ -15,6 +15,7 @@ local Context = require("source.wechat.context")
 local Annotations = require("source.wechat.annotations")
 local Assets = require("source.wechat.assets")
 local Text = require("utils.text")
+local Paths = require("utils.paths")
 local _ = require("gettext")
 
 local Chapter = {}
@@ -176,18 +177,34 @@ function Chapter.fetchContentAsync(bookId, chapter, cb)
         or string.format(_("第 %d 章"), tonumber(chapter and chapter.idx) or 0)
     local cancelled, asset_job = false, nil
     local reader_url = Protocol.readerUrl(bookId, chapter and chapter.uid)
-    local fetch_job = Chapter.fetchHtmlAsync(bookId, chapter or {}, function(html, err)
+    local cached_html
+    if chapter and chapter.idx then
+        local file = io.open(Paths.chapterPath(bookId, chapter.idx, "wechat"), "rb")
+        if file then
+            cached_html = file:read("*a")
+            file:close()
+            if cached_html == "" then cached_html = nil end
+        end
+    end
+    local function localize(html, err)
         if cancelled then return end
         if not html then
             logger.warn("weread chapter fetch", bookId, chapter and chapter.idx, err)
             cb(nil, err)
             return
         end
-        asset_job = Assets.localizeAsync(bookId, chapter or {}, html, reader_url, function(localized)
+        -- 已保存正文只补远程图片，不重拉正文分片或已处理的 tar。
+        asset_job = Assets.localizeAsync(bookId, cached_html and {} or (chapter or {}), html, reader_url, function(localized)
             if cancelled then return end
             cb({ title = title, html = localized })
         end)
-    end)
+    end
+    local fetch_job
+    if cached_html then
+        localize(Text.htmlBodyFragment(cached_html))
+    else
+        fetch_job = Chapter.fetchHtmlAsync(bookId, chapter or {}, localize)
+    end
     return { cancel = function()
             cancelled = true
             if fetch_job and fetch_job.cancel then fetch_job:cancel() end

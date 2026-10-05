@@ -51,7 +51,12 @@ local function cacheReady(path, value)
     end
 end
 
---- 章节 HTML 是否可直接复用（存在且远程 img 已内联）。
+local function chapterAvailable(path)
+    local attr = lfs.attributes(path)
+    return attr and attr.mode == "file" and attr.size > 0 or false
+end
+
+--- 章节 HTML 是否缓存完整（存在且远程 img 已内联）。
 ---@param path string|nil
 ---@return boolean
 local function chapterReady(path)
@@ -112,7 +117,7 @@ local function existingLocalPath(identity, opts)
     local idx = tonumber(opts.chapter_idx)
     if idx then
         local path = Paths.chapterPath(identity.stable_id, idx, identity.source_id)
-        if chapterReady(path) then return path, idx end
+        if chapterAvailable(path) then return path, idx end
         return nil
     end
     local pos = localPosition(identity)
@@ -125,7 +130,7 @@ local function existingLocalPath(identity, opts)
         idx = 1
     end
     local path = Paths.chapterPath(identity.stable_id, idx, identity.source_id)
-    if chapterReady(path) then return path, idx end
+    if chapterAvailable(path) then return path, idx end
     return nil
 end
 
@@ -230,7 +235,54 @@ local function write(path, payload, cb, opts)
         end }
 end
 
---- 确保第 idx 章正文已在本地：已就绪则直接用（源提供 refreshCached 时交它决定是否刷新），
+local inflight = {}
+
+-- 同一文件的正文请求和原子写入共享一个任务；每个调用方独立取消。
+local function materialize(path, identity, item, ops, cb, opts)
+    local operation = inflight[path]
+    local first = operation == nil
+    if first then
+        operation = { waiters = {} }
+        inflight[path] = operation
+    end
+    local waiter = { cb = cb }
+    operation.waiters[waiter] = true
+    local handle = { cancel = function()
+        operation.waiters[waiter] = nil
+        if inflight[path] ~= operation or next(operation.waiters) then return end
+        inflight[path] = nil
+        local job = operation.active and operation.active.job
+        operation.active = nil
+        if job and job.cancel then job.cancel() end
+    end }
+    if not first then return handle end
+
+    local function finish(saved_path, err)
+        inflight[path] = nil
+        for subscriber in pairs(operation.waiters) do
+            operation.waiters[subscriber] = nil
+            subscriber.cb(saved_path, err)
+        end
+    end
+    local function run(start, done)
+        local stage = {}
+        operation.active = stage
+        stage.job = start(function(...)
+            if inflight[path] ~= operation or operation.active ~= stage then return end
+            operation.active = nil
+            done(...)
+        end)
+    end
+    run(function(done)
+        return ops.fetchContent(identity, item, done)
+    end, function(payload, err)
+        if not payload then finish(nil, err or _("章节内容获取失败")); return end
+        run(function(done) return write(path, payload, done, opts) end, finish)
+    end)
+    return handle
+end
+
+--- 确保第 idx 章正文已在本地：已落盘则直接用（源提供 refreshCached 时交它决定是否刷新），
 --- 否则拉正文并落盘。
 ---@param identity BookIdentity
 ---@param toc BookChapter[] 完整目录
@@ -240,8 +292,9 @@ end
 ---@return { cancel: fun() }|nil
 local function ensure(identity, toc, idx, ops, cb)
     local path = Paths.chapterPath(identity.stable_id, idx, identity.source_id)
-    if chapterReady(path) then
-        if ops.refreshCached then
+    if chapterAvailable(path) then
+        -- 图片修复持有 .part 时，直接读取旧缓存，避免清理器争用临时文件。
+        if ops.refreshCached and not inflight[path] then
             local item = toc[idx]
             return ops.refreshCached(identity, item, path, cb)
         end
@@ -249,10 +302,7 @@ local function ensure(identity, toc, idx, ops, cb)
         return
     end
     local item = assert(toc[idx], "invalid chapter toc")
-    return ops.fetchContent(identity, item, function(payload, err)
-        if not payload then cb(nil, err or _("章节下载失败")); return end
-        write(path, payload, cb)
-    end)
+    return materialize(path, identity, item, ops, cb)
 end
 
 --- 按章打开：拉目录 → 选章 → 落盘正文 → 登记路径；可取消。
@@ -514,33 +564,31 @@ function Chapter.prefetchAsync(identity, book, toc, from_idx, count, ops, cb)
             failed(_("章节信息缺失") .. " #" .. tostring(idx))
             return
         end
-        active = ops.fetchContent(identity, item, function(payload, err)
-            if cancelled then return end
+        local operation = {}
+        active = operation
+        operation.job = materialize(path, identity, item, ops, function(wpath, err)
+            if cancelled or active ~= operation then return end
             active = nil
-            if not payload then
-                failed(err or (_("章节内容获取失败") .. " #" .. tostring(idx)))
+            if not wpath then
+                failed(err or (_("章节保存失败") .. " #" .. tostring(idx)))
                 return
             end
-            active = write(path, payload, function(wpath, write_err)
-                active = nil
-                if cancelled then return end
-                if not wpath then
-                    failed(write_err or (_("章节保存失败") .. " #" .. tostring(idx)))
-                    return
-                end
-                local store_opts = { chapter_idx = idx }
-                if ops.persist_toc ~= false then store_opts.toc = toc end
-                if ops.persist_book ~= false then store_opts.book = book end
-                local touched, touch_err = require("book.store").touch(wpath, identity, store_opts)
-                if not touched then
-                    failed(touch_err)
-                    return
-                end
-                cached_count = cached_count + 1
-                report()
-                continueNext()
-            end, { yield_write = true })
-        end)
+            local store_opts = { chapter_idx = idx }
+            if ops.persist_toc ~= false then store_opts.toc = toc end
+            if ops.persist_book ~= false then store_opts.book = book end
+            local touched, touch_err = require("book.store").touch(wpath, identity, store_opts)
+            if not touched then
+                failed(touch_err)
+                return
+            end
+            if not chapterReady(wpath) then
+                failed(_("章节下载失败") .. " #" .. tostring(idx))
+                return
+            end
+            cached_count = cached_count + 1
+            report()
+            continueNext()
+        end, { yield_write = true })
     end
 
     require("ui/network/manager"):runWhenOnline(function()
@@ -549,7 +597,7 @@ function Chapter.prefetchAsync(identity, book, toc, from_idx, count, ops, cb)
     end)
     return { cancel = function()
             cancelled = true
-            local job = active
+            local job = active and active.job
             active = nil
             if job and job.cancel then job.cancel() end
         end }
@@ -565,10 +613,15 @@ end
 ---@return { cancel: fun() }
 function Chapter.cacheAllAsync(source, identity, fetchContent, on_progress, cb, interval_seconds)
     local cancelled, active = false, nil
-    active = source:loadTocAsync(identity, function(toc, err)
-        if cancelled then return end
+    local loading = {}
+    active = loading
+    loading.job = source:loadTocAsync(identity, function(toc, err)
+        if cancelled or active ~= loading then return end
+        active = nil
         if not toc then cb(false, 0, err or _("章节列表为空"), 0, 0); return end
-        active = Chapter.prefetchAsync(identity, nil, toc, 0, #toc, {
+        local caching = {}
+        active = caching
+        caching.job = Chapter.prefetchAsync(identity, nil, toc, 0, #toc, {
             fetchContent = fetchContent,
             persist_toc = false,
             persist_book = false,
@@ -576,14 +629,17 @@ function Chapter.cacheAllAsync(source, identity, fetchContent, on_progress, cb, 
             -- 全本缓存让服务端有喘息时间；阅读期预取仍保持无间隔。
             interval_seconds = interval_seconds or 1.5,
         }, function(cached, total, failed, last_err)
-            if not cancelled then
+            if not cancelled and active == caching then
+                active = nil
                 cb(failed == 0, cached, last_err, total, failed)
             end
         end)
     end)
     return { cancel = function()
             cancelled = true
-            if active and active.cancel then active.cancel() end
+            local job = active and active.job
+            active = nil
+            if job and job.cancel then job.cancel() end
         end }
 end
 

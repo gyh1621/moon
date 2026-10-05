@@ -109,15 +109,15 @@ Assert.is_true(html:find("<p>正文2</p>", 1, true) ~= nil)
 Chapter.openAsync({ type = "chapter" }, identity, {}, { chapter_idx = 2 }, ops, function(p) path = p end)
 Assert.len(fetched, 1)
 
--- 缓存 HTML 仍含远程 img 时必须重新拉取并内联。
+-- 图片尚未缓存不影响正文复用。
 local stale = io.open(tmp .. "/2.html", "wb")
 stale:write('<!DOCTYPE html><html><body><img src="https://res.weread.qq.com/wrepub/x.png"/></body></html>')
 stale:close()
 Chapter.openAsync({ type = "chapter" }, identity, {}, { chapter_idx = 2 }, ops, function(p) path = p end)
 Assert.eq(fetched[#fetched], 2)
-Assert.len(fetched, 2)
+Assert.len(fetched, 1)
 
--- write() 留下远程 img 时不得标 ready，同进程再开仍要重拉。
+-- 重开含远程图片的缓存不重新请求正文。
 local remote_n = 0
 local remote_ops = {
     loadToc = function(_, cb) cb(toc) end,
@@ -130,9 +130,21 @@ local remote_stale = io.open(tmp .. "/2.html", "wb")
 remote_stale:write('<!DOCTYPE html><html><body><img src="https://cdn/stale.png"/></body></html>')
 remote_stale:close()
 Chapter.openAsync({ type = "chapter" }, identity, {}, { chapter_idx = 2 }, remote_ops, function() end)
-Assert.eq(remote_n, 1)
+Assert.eq(remote_n, 0)
 Chapter.openAsync({ type = "chapter" }, identity, {}, { chapter_idx = 2 }, remote_ops, function() end)
-Assert.eq(remote_n, 2)
+Assert.eq(remote_n, 0)
+
+-- 缺少图片的正文仍可离线快开，不显示下载对话框。
+network.online = false
+local offline_cached_path
+Chapter.openWithUi({}, identity, {}, { chapter_idx = 2 }, remote_ops, function(p)
+    offline_cached_path = p
+end)
+Stubs.flush()
+Assert.eq(offline_cached_path, tmp .. "/2.html")
+Assert.eq(remote_n, 0)
+Assert.eq(progress_ui.shown, 0)
+network.online = true
 
 -- 未指定章时优先使用本地 pending_progress。
 pending = { chapter_idx = 3 }
@@ -184,12 +196,14 @@ io.open = function(file, mode)
     end
     return real_open(file, mode)
 end
-local write_failed_path, write_failed_err
-Chapter.openAsync({ type = "chapter" }, identity, {}, { chapter_idx = 1 }, ops, function(p, err)
-    write_failed_path, write_failed_err = p, err
+local write_failed_count, write_failed_err
+Chapter.prefetchAsync(identity, {}, toc, 0, 1, ops, function(cached, _, failed, err)
+    Assert.eq(cached, 0)
+    write_failed_count, write_failed_err = failed, err
 end)
+Stubs.flush()
 io.open = real_open
-Assert.is_nil(write_failed_path)
+Assert.eq(write_failed_count, 1)
 Assert.eq(write_failed_err, "disk full")
 local preserved = assert(io.open(tmp .. "/1.html", "rb"))
 Assert.eq(preserved:read("*a"), old_html)
