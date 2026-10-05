@@ -29,7 +29,7 @@ local Update = {
     _job = nil,
 }
 
-local API_URL = "https://api.github.com/repos/AnkioTomas/moon/releases/latest"
+local API_URL = "https://api.github.com/repos/gyh1621/moon/releases/latest"
 local CHECK_INTERVAL = 24 * 60 * 60
 local GITHUB = "https://github.com"
 
@@ -90,7 +90,7 @@ local function findAsset(assets, name)
     for _, asset in ipairs(type(assets) == "table" and assets or {}) do
         if type(asset) == "table" and asset.name == name
             and type(asset.browser_download_url) == "string"
-            and asset.browser_download_url:match("^https://github%.com/AnkioTomas/moon/releases/download/")
+            and asset.browser_download_url:match("^https://github%.com/gyh1621/moon/releases/download/")
         then
             return asset
         end

@@ -63,7 +63,7 @@ jobs:
           sha256sum "$ASSET" > "${ASSET}.sha256"
 
           echo "Packaged ${ASSET} (version ${VERSION})"
-          unzip -l "$ASSET" | head -n 30
+          unzip -l "$ASSET" | sed -n '1,30p'
 
       - name: Assemble input method dictionaries
         id: ime

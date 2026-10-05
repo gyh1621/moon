@@ -40,11 +40,12 @@ package.preload["device"] = function()
     return { screen = { getHeight = function() return 800 end } }
 end
 package.preload["json"] = function() return { decode = function(value) return value end } end
-local check_cb, download_cb, download_opts
+local check_cb, check_url, download_cb, download_opts
 local probes = {}
 package.preload["http.request"] = function()
     return {
-        get = function(_, _, cb)
+        get = function(url, _, cb)
+            check_url = url
             check_cb = cb
             return { cancel = function() end }
         end,
@@ -110,7 +111,7 @@ local notes = Update._formatNotes([[
 
 ### 完整对比
 
-https://github.com/AnkioTomas/moon/compare/v1.2.3...v1.2.4
+https://github.com/gyh1621/moon/compare/v1.2.3...v1.2.4
 ]])
 Assert.not_nil(notes)
 Assert.matches(notes, "相对上一版本 v1.2.3")
@@ -129,7 +130,7 @@ local release = {
     assets = {
         {
             name = "book.koplugin-v1.2.4.zip",
-            browser_download_url = "https://github.com/AnkioTomas/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip",
+            browser_download_url = "https://github.com/gyh1621/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip",
             digest = "sha256:" .. hash,
             size = 2048,
         },
@@ -151,7 +152,7 @@ Assert.matches(missing_err, "checksum")
 
 release.assets[2] = {
     name = "book.koplugin-v1.2.4.zip.sha256",
-    browser_download_url = "https://github.com/AnkioTomas/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip.sha256",
+    browser_download_url = "https://github.com/gyh1621/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip.sha256",
 }
 parsed, err = Update._parseRelease(release)
 Assert.not_nil(parsed, err)
@@ -163,18 +164,28 @@ local foreign, foreign_err = Update._parseRelease(release)
 Assert.is_nil(foreign)
 Assert.matches(foreign_err, "plugin archive")
 
+-- Upstream assets must not enter this fork's update channel, even on GitHub.
+release.assets[1].browser_download_url = "https://github.com/AnkioTomas/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip"
+local upstream, upstream_err
+Update.check(function(value, failure) upstream, upstream_err = value, failure end)
+Assert.eq(check_url, "https://api.github.com/repos/gyh1621/moon/releases/latest")
+check_cb(release)
+Assert.is_nil(upstream)
+Assert.matches(upstream_err, "plugin archive")
+
 -- 手动检查必须展示更新日志，确认后再下载安装。
 local update_release = {
     tag_name = "v1.2.4",
     body = "## 月读 v1.2.4\n\n### 更新内容\n\n- :sparkles: show notes\n",
     assets = {{
         name = "book.koplugin-v1.2.4.zip",
-        browser_download_url = "https://github.com/AnkioTomas/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip",
+        browser_download_url = "https://github.com/gyh1621/moon/releases/download/v1.2.4/book.koplugin-v1.2.4.zip",
         digest = "sha256:" .. hash,
         size = 4096,
     }},
 }
 Update.manualCheck("/plugins/book.koplugin")
+Assert.eq(check_url, "https://api.github.com/repos/gyh1621/moon/releases/latest")
 Assert.eq(shown[1].text, "正在检查月读更新…")
 Assert.is_nil(shown[1].timeout)
 check_cb(update_release)
@@ -199,7 +210,7 @@ Assert.eq(shown[3].progress_max, 4096)
 Assert.len(probes, 6)
 Assert.eq(probes[1].url, direct)
 for i = 2, 6 do
-    Assert.matches(probes[i].url, "/AnkioTomas/moon/releases/download/v1%.2%.4/book%.koplugin%-v1%.2%.4%.zip$")
+    Assert.matches(probes[i].url, "/gyh1621/moon/releases/download/v1%.2%.4/book%.koplugin%-v1%.2%.4%.zip$")
     Assert.is_true(probes[i].url ~= direct)
 end
 
