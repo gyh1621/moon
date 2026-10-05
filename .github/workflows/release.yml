@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag to publish (for example v0.1.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,11 +17,14 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Run offline tests
         run: |
@@ -27,11 +36,16 @@ jobs:
         id: ver
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           VERSION="${TAG#v}"
 
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-].*)?$ ]]; then
+          if [[ "$TAG" != v* || ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-].*)?$ ]]; then
             echo "Invalid version tag: ${TAG} (expected vMAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+
+          if [[ "$(git rev-parse --verify "refs/tags/${TAG}^{commit}")" != "$(git rev-parse HEAD)" ]]; then
+            echo "Checkout does not match version tag: ${TAG}"
             exit 1
           fi
 
@@ -177,7 +191,7 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           ASSET="${{ steps.ver.outputs.asset }}"
           read -r -a DICTS <<< "${{ steps.ime.outputs.assets }}"
-          ARGS=(release create "$TAG" "$ASSET" "${ASSET}.sha256" "${DICTS[@]}" --title "月读 ${TAG}" --notes-file RELEASE_NOTES.md)
+          ARGS=(release create "$TAG" "$ASSET" "${ASSET}.sha256" "${DICTS[@]}" --verify-tag --title "月读 ${TAG}" --notes-file RELEASE_NOTES.md)
 
           if [ "${{ steps.ver.outputs.prerelease }}" = "true" ]; then
             ARGS+=(--prerelease)

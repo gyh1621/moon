@@ -41,4 +41,12 @@ git push origin v0.1.0
 
 后续版本递增为 `v0.1.1`、`v0.1.2` 等，不移动已有发布标签。`.github/workflows/release.yml` 在 `v*` 标签推送时运行测试、注入版本号，发布 `book.koplugin-v0.1.0.zip`、对应 `.sha256` 和输入法词库。源码的 `bookversion.lua` 保持开发版本。
 
+已有标签未触发发布时，在 GitHub Actions 的 `Release` 页面选择 `Run workflow`，填写已有标签；或执行：
+
+```sh
+gh workflow run release.yml --repo gyh1621/moon --ref main -f tag=v0.1.0
+```
+
+手动发布会检出并测试该标签，不创建或移动标签；已发布的版本不重复运行。
+
 更新器使用最新稳定 Release；带 `-` 的预发布标签不会成为稳定更新。首次手动安装本 fork 的发布 ZIP 后，设置中的「检查更新」会检查本 fork；自动检查仍只提示，不自动安装。替换插件目录时保留 `.moon` 用户数据。
