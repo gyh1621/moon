@@ -31,6 +31,7 @@ local clock_font_registered = false
 ---@field time_widget table|nil
 ---@field weekday table|nil
 ---@field content_group table|nil
+---@field calendar_group table|nil
 ---@field detail table|nil
 ---@field extra table|nil
 ---@field _tick fun()|nil
@@ -178,13 +179,13 @@ function M:createWidget()
         fgcolor = UI.dim(),
     }
     local row_h = UI.sz(18)
-    local calendar = VerticalGroup:new{
+    self.calendar_group = VerticalGroup:new{
         align = "left",
-        LeftContainer:new{ dimen = Geom:new{ w = calendar_w, h = UI.sz(23) }, self.weekday },
+        LeftContainer:new{ dimen = Geom:new{ w = self.weekday:getSize().w, h = UI.sz(23) }, self.weekday },
         VerticalSpan:new{ width = UI.sz(7) },
-        LeftContainer:new{ dimen = Geom:new{ w = calendar_w, h = row_h }, self.detail },
+        LeftContainer:new{ dimen = Geom:new{ w = self.detail:getSize().w, h = row_h }, self.detail },
         VerticalSpan:new{ width = UI.sz(3) },
-        LeftContainer:new{ dimen = Geom:new{ w = calendar_w, h = row_h }, self.extra },
+        LeftContainer:new{ dimen = Geom:new{ w = self.extra:getSize().w, h = row_h }, self.extra },
     }
     self.content_group = HorizontalGroup:new{
         align = "center",
@@ -192,7 +193,7 @@ function M:createWidget()
         HorizontalSpan:new{ width = gap },
         LineWidget:new{ dimen = Geom:new{ w = rule_w, h = UI.sz(66) }, background = UI.dim() },
         HorizontalSpan:new{ width = gap },
-        calendar,
+        self.calendar_group,
     }
     self.desktop = self.ctx.desktop
     self.region = Geom:new{ x = 0, y = self.opts.y or 0, w = w, h = h }
@@ -212,6 +213,11 @@ function M:paint()
     self.weekday:setText(weekday)
     self.detail:setText(date)
     self.extra:setText(lunar)
+    for _, i in ipairs({ 1, 3, 5 }) do
+        local row = self.calendar_group[i]
+        row.dimen.w = row[1]:getSize().w
+    end
+    self.calendar_group:resetLayout()
     self.content_group:resetLayout()
     self:dirty("content")
 end
@@ -265,6 +271,7 @@ function M:onDestroy()
     self.time_widget = nil
     self.weekday = nil
     self.content_group = nil
+    self.calendar_group = nil
     self.detail = nil
     self.extra = nil
     self.region = nil

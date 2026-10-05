@@ -43,7 +43,7 @@ end
 local function containerStub()
     return { new = function(_, opts)
         opts.getSize = function(self) return self.dimen or { w = self.width or 0, h = self.height or 0 } end
-        opts.resetLayout = function() end
+        opts.resetLayout = function(self) self.layout_resets = (self.layout_resets or 0) + 1 end
         return opts
     end }
 end
@@ -60,9 +60,9 @@ local text_widgets = {}
 package.preload["ui/widget/textwidget"] = function()
     return {
         new = function(_, opts)
-            local widget = { text = opts.text }
+            local widget = { text = opts.text, width = 100 }
             function widget:setText(text) self.text = text end
-            function widget:getSize() return { w = 100, h = 40 } end
+            function widget:getSize() return { w = self.width, h = 40 } end
             text_widgets[#text_widgets + 1] = widget
             return widget
         end,
@@ -97,11 +97,19 @@ Assert.eq(text_widgets[1].text, "10:20")
 Assert.eq(text_widgets[2].text, "Thursday")
 Assert.eq(text_widgets[3].text, "2026.09.10")
 Assert.eq(text_widgets[4].text, "--")
+local calendar = clock.content_group[5]
+for _, row in ipairs({ 1, 3, 5 }) do
+    Assert.eq(calendar[row].dimen.w, calendar[row][1]:getSize().w,
+        "calendar rows must not reserve invisible trailing space")
+end
 Assert.is_nil(myrl_cb, "build must not fetch")
 clock:onResume()
 Assert.not_nil(myrl_cb)
+clock.extra.width = 125
 myrl_cb({ lunar = "农历七月廿八", holiday = "中秋" })
 Assert.eq(text_widgets[4].text, "农历七月廿八")
+Assert.eq(calendar[5].dimen.w, 125, "loaded lunar text must update the centered width")
+Assert.is_true((calendar.layout_resets or 0) > 0, "calendar layout must update before recentering")
 Assert.is_true(paints >= 1)
 
 -- 同一分钟再次 Resume、缓存返回同内容新表：都不得重复刷新。
