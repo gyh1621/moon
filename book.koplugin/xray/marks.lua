@@ -268,6 +268,10 @@ local function renderKey(ui)
     if not cur or not cur.identity then
         return nil
     end
+    local chapter = cur.chapter
+    if chapter and (chapter.request or chapter.target or chapter.switching) then
+        return nil
+    end
     local w, h = screenSize(ui)
     local doc = ui and ui.document
     local pos = ""
@@ -313,11 +317,14 @@ local function scheduleScan(self, key, entities)
             timeout = 30,
             on_done = function(marks)
                 if self._scan_token ~= token or self._scan_pending ~= key
-                    or self.ui ~= ui or not Marks.enabled() or renderKey(ui) ~= key then
+                    or self.ui ~= ui then
                     return
                 end
                 self._scan_job = nil
                 self._scan_pending = nil
+                if not Marks.enabled() or renderKey(ui) ~= key then
+                    return
+                end
                 self._marks = marks or {}
                 self._render_key = key
                 if ui.dialog then
@@ -329,7 +336,7 @@ local function scheduleScan(self, key, entities)
                 self._scan_job = nil
                 self._scan_pending = nil
                 self._marks = {}
-                self._render_key = key
+                self._render_key = renderKey(ui) == key and key or nil
                 logger.warn("book.xray marks scan failed", err)
             end,
         })

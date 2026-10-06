@@ -610,6 +610,143 @@ do
     InfoMessage.onShow = original_on_show
 end
 
+-- X-Ray 完成与真实切章生命周期交错：旧页结果不能重绘，失败后和新章仍能扫描。
+do
+    local UIManager = require("ui/uimanager")
+    local old_schedule, old_unschedule, old_dirty = UIManager.scheduleIn, UIManager.unschedule, UIManager.setDirty
+    local timers, jobs, paints = {}, {}, {}
+    UIManager.scheduleIn = function(_, delay, callback) timers[callback] = delay end
+    UIManager.unschedule = function(_, callback) timers[callback] = nil end
+    UIManager.setDirty = function(_, widget) paints[#paints + 1] = widget end
+    local modules = { "l10n", "db.xray", "workers.job", "xray.marks" }
+    local loaded, preloads = {}, {}
+    for _, name in ipairs(modules) do
+        loaded[name], preloads[name] = package.loaded[name], package.preload[name]
+        package.loaded[name] = nil
+    end
+    package.preload["l10n"] = function() return { apply = function() end } end
+    package.preload["db.xray"] = function()
+        return { list = function() return {{ name = "John", aliases = {}, kind = "character" }} end }
+    end
+    package.preload["workers.job"] = function()
+        return { run = function(worker, opts)
+            local job = { worker = worker, opts = opts, settled = false }
+            job.cancel = function() job.settled = true end
+            jobs[#jobs + 1] = job
+            return job
+        end }
+    end
+    local Marks = require("xray.marks")
+    local complete
+    resolved_source = {
+        type = "chapter",
+        openBookAsync = function(_, _, _, callback)
+            complete = callback
+            return { cancel = function() end }
+        end,
+    }
+    stored_toc.chapters = {{ idx = 1 }, { idx = 2 }}
+    local function reader(path)
+        local plugin = mkPlugin(path)
+        plugin.ui.dialog = plugin.ui
+        plugin.ui.registerTouchZones = function() end
+        plugin.ui.view = { dimen = { w = 100, h = 100 },
+            registerViewModule = function(self, _, module) module.view = self end }
+        plugin.ui.document.findText = function() return {{ start = "xp0", ["end"] = "xp1" }} end
+        plugin.ui.document.getScreenBoxesFromPositions = function() return {{ x = 1, y = 1, w = 30, h = 20 }} end
+        Session.onReaderReady(plugin)
+        Marks.install(plugin.ui)
+        return plugin
+    end
+    local plugin = reader("/cache/1.html")
+    local function startScan(same_page)
+        if not same_page then
+            local page = #jobs + 1
+            plugin.ui.getCurrentPage = function() return page end
+        end
+        Marks:updateView()
+        for callback, delay in pairs(timers) do
+            if delay == 0.2 then timers[callback] = nil; callback(); return jobs[#jobs] end
+        end
+        error("Expected a fresh X-Ray debounce")
+    end
+    local function finish(job, failed)
+        job.settled = true
+        if failed then job.opts.on_failed("scan failed") else job.opts.on_done(job.worker()) end
+    end
+    finish(startScan())
+    Assert.eq(paints[#paints], plugin.ui, "当前页完成仍能重绘实体标记")
+    local count = #paints
+    local job = startScan()
+    Assert.is_true(Session.gotoChapter(2))
+    finish(job)
+    Assert.len(paints, count, "下载等待期间的旧页扫描不能重绘阅读器")
+    complete(nil, "download failed")
+    finish(startScan(true))
+    Assert.len(paints, count + 1, "下载失败后恢复旧页扫描")
+
+    count = #paints
+    job = startScan()
+    Assert.is_true(Session.gotoChapter(2))
+    complete("/cache/2.html")
+    finish(job)
+    Assert.len(paints, count, "目标章已确定、原生交接未开始时也不能重绘旧页")
+    local jobs_before = #jobs
+    Marks:updateView()
+    for callback, delay in pairs(timers) do
+        if delay == 0.2 then timers[callback] = nil; callback() end
+    end
+    Assert.len(jobs, jobs_before, "切章期间不启动新的旧页扫描")
+    Stubs.flush()
+    plugin = reader("/cache/2.html")
+    finish(startScan())
+    Assert.eq(paints[#paints], plugin.ui, "新章标记仍能正常扫描和重绘")
+
+    local ReaderUI = require("apps/reader/readerui")
+    local old_switch = ReaderUI.instance.switchDocument
+    ReaderUI.instance.switchDocument = function() error("native switch failed") end
+    job = startScan()
+    Assert.is_true(Session.gotoChapter(1))
+    complete("/cache/1.html")
+    count = #paints
+    finish(job)
+    Assert.len(paints, count)
+    Stubs.flush()
+    finish(startScan(true))
+    Assert.len(paints, count + 1, "原生交接失败后仍能重新扫描当前页")
+    ReaderUI.instance.switchDocument = old_switch
+
+    job = startScan()
+    Assert.is_true(Session.gotoChapter(1))
+    finish(job, true)
+    complete(nil, "download failed")
+    local runs = #jobs
+    Marks:updateView()
+    for callback, delay in pairs(timers) do
+        if delay == 0.2 then timers[callback] = nil; callback() end
+    end
+    Assert.len(jobs, runs + 1, "切章期间失败的扫描不能把旧页记为已完成")
+    finish(jobs[#jobs])
+
+    local page = #jobs + 1
+    plugin.ui.getCurrentPage = function() return page end
+    Marks:updateView()
+    Assert.is_true(Session.gotoChapter(1))
+    runs = #jobs
+    for callback, delay in pairs(timers) do
+        if delay == 0.2 then timers[callback] = nil; callback() end
+    end
+    Assert.len(jobs, runs, "已排队的防抖回调在切章时不能启动扫描")
+    complete(nil, "download failed")
+    finish(startScan(true))
+    Session.onCloseDocument(plugin)
+    resolved_source = nil
+    UIManager.scheduleIn, UIManager.unschedule, UIManager.setDirty = old_schedule, old_unschedule, old_dirty
+    for _, name in ipairs(modules) do
+        package.loaded[name], package.preload[name] = loaded[name], preloads[name]
+    end
+end
+
 -- 原生翻页越界之前处理切章，避免 page 0/末页之后再绘制旧章节。
 do
     stored_toc.chapters = { { idx = 1 }, { idx = 2 } }
