@@ -64,6 +64,8 @@ Session.onChapterBoundary(1)  -- 页尾 → 下一章
 -- 内部：源打开邻章 path → switchDocument → 新 ReaderReady（skip_pull）
 ```
 
+提示在阻塞的原生打开之前先上屏，交接时保留已绘制的画面，避免重画旧章节背景。仅在同步 `switchDocument` / `showReader` 调用期间，跳过原生不可见、零超时打开框的 UI 刷新，保留其自动关闭，并在返回或抛错后恢复原生 `onShow`。新章就绪或切换报错时正常关闭提示；最终页面的原生全刷、图像抖动和元数据保存策略不变。
+
 ### 注意
 
 - `touch` 失败 = 打开失败，不要把未登记 path 交给 Reader。

@@ -102,7 +102,6 @@ function Note.save(ui, identity, done)
         if done then done(false) end
         return
     end
-    ui.doc_settings:flush()
     -- ReaderAnnotation 只在 SaveSettings 时才把内存数组写进 doc_settings。
     -- AnnotationsModified 和 CloseDocument 阶段直接读 doc_settings 会拿到旧快照。
     local items = ui.annotation and ui.annotation.annotations

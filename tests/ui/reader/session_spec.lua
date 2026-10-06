@@ -433,17 +433,50 @@ do
     local pulls_before = countPulls()
     Session.onReaderReady(plugin)
     Assert.eq(countPulls(), pulls_before + 1, "冷打开只 pull 一次")
+    local InfoMessage = require("ui/widget/infomessage")
+    local original_on_show = InfoMessage.onShow
+    local opening_refreshes = 0
+    local native_on_show = function(widget)
+        if widget.invisible then opening_refreshes = opening_refreshes + 1 end
+        return "native"
+    end
+    InfoMessage.onShow = native_on_show
+    local ReaderUI = require("apps/reader/readerui")
+    local original_switch = ReaderUI.instance.switchDocument
+    local handoff_invisible, handoff_covers, opening_popup, opening_timeout
+    ReaderUI.instance.switchDocument = function(self, path)
+        handoff_invisible = transition_notice.invisible
+        handoff_covers = transition_notice.covers_fullscreen
+        Assert.eq(InfoMessage.onShow({ text = "Visible warning" }), "native", "可见提示保留原生行为")
+        opening_popup = { invisible = true, timeout = 0 }
+        InfoMessage.onShow(opening_popup)
+        if opening_popup._timeout_func then
+            opening_timeout = timers[opening_popup._timeout_func]
+            timers[opening_popup._timeout_func] = nil
+            opening_popup._timeout_func()
+        end
+        return original_switch(self, path)
+    end
     Assert.is_true(Session.gotoChapter(2))
     Assert.is_nil(transition_notice, "快速切章不应立即显示提示")
     Stubs.flush()
+    Assert.eq(opening_refreshes, 0, "不可见的原生打开框不应触发全屏刷新")
+    Assert.is_true(handoff_invisible, "已绘制提示在交接时不重复标脏")
+    Assert.is_true(handoff_covers, "交接期间不重画底层阅读背景")
+    Assert.eq(opening_timeout, 0, "不可见打开框仍按原生零超时关闭")
+    Assert.is_nil(opening_popup._timeout_func)
     Assert.eq(calls.switched_path, "/cache/2.html")
     Assert.eq(repaints, 0, "缓存切章不应强制绘制旧章节")
     Assert.not_nil(transition_notice, "缓存准备完成后仍须在阻塞的原生打开前显示提示")
     Assert.is_nil(next(timers), "提示已显示后取消延迟计时")
+    Assert.eq(InfoMessage.onShow, native_on_show, "同步交接返回后恢复原生 onShow")
+    ReaderUI.instance.switchDocument = original_switch
     plugin.ui.document.file = "/cache/2.html"
     local toc_reads_before_switch_ready = toc_reads
     Session.onReaderReady(plugin)
     Assert.eq(transition_closes, 1, "原生打开完成后关闭提示")
+    Assert.is_false(transition_notice.invisible, "关闭提示时正常刷新原有区域")
+    Assert.is_false(transition_notice.covers_fullscreen)
     Assert.eq(countPulls(), pulls_before + 1, "连续切章不应再 pull")
     Assert.eq(toc_reads, toc_reads_before_switch_ready, "连续切章复用已加载目录")
     Assert.len(Session.toc(), 2)
@@ -552,6 +585,15 @@ do
     Assert.is_nil(next(timers), "手动打开同书其他章节也取消延迟提示")
     timer()
     Assert.is_nil(transition_notice)
+    ReaderUI.instance.switchDocument = function() error("native switch failed") end
+    local closes_before_error = transition_closes
+    Assert.is_true(Session.gotoChapter(2))
+    complete("/cache/2.html")
+    Stubs.flush()
+    Assert.eq(transition_closes, closes_before_error + 1, "同步切换异常也清除已显示提示")
+    Assert.eq(InfoMessage.onShow, native_on_show, "同步交接抛错后也恢复原生 onShow")
+    ReaderUI.instance.switchDocument = original_switch
+    transition_notice = nil
     Assert.is_true(Session.gotoChapter(2))
     timer = next(timers)
     Session.onCloseDocument(plugin)
@@ -565,6 +607,7 @@ do
     UIManager.show, UIManager.close = old_show, old_close
     UIManager.scheduleIn, UIManager.unschedule = old_schedule, old_unschedule
     UIManager.forceRePaint = old_repaint
+    InfoMessage.onShow = original_on_show
 end
 
 -- 原生翻页越界之前处理切章，避免 page 0/末页之后再绘制旧章节。

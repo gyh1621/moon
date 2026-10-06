@@ -38,6 +38,8 @@ end
 local function closeTransitionNotice()
     cancelTransitionNoticeTimer()
     if transition_notice then
+        transition_notice.invisible = false
+        transition_notice.covers_fullscreen = false
         require("ui/uimanager"):close(transition_notice)
         transition_notice = nil
     end
@@ -407,6 +409,24 @@ local function requestChapter(chapter, idx, opts)
         UIManager:tickAfterNext(function()
             if chapter_session ~= chapter then return end
             chapter.switching = true
+            -- 提示已经上屏；交接期间保留原有像素，不重绘已关闭的阅读器背景。
+            transition_notice.invisible = true
+            transition_notice.covers_fullscreen = true
+            local InfoMessage = require("ui/widget/infomessage")
+            local on_show = InfoMessage.onShow
+            InfoMessage.onShow = function(widget, ...)
+                -- 原生 seamless 打开框不可见，onShow 却会为未绘制的区域请求全屏 UI 刷新。
+                if widget.invisible and widget.timeout == 0
+                    and not widget.show_delay and not widget.flush_events_on_show then
+                    widget._timeout_func = function()
+                        widget._timeout_func = nil
+                        UIManager:close(widget)
+                    end
+                    UIManager:scheduleIn(0, widget._timeout_func)
+                    return true
+                end
+                return on_show(widget, ...)
+            end
             local ok, switch_err = pcall(function()
                 if ReaderUI.instance then
                     ReaderUI.instance:switchDocument(path, true)
@@ -414,6 +434,7 @@ local function requestChapter(chapter, idx, opts)
                     ReaderUI:showReader(path, nil, true)
                 end
             end)
+            InfoMessage.onShow = on_show
             if not ok and chapter_session == chapter then
                 chapter.switching = false
                 chapter.target = nil

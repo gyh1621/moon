@@ -5,6 +5,7 @@ local Assert = require("support.assert")
 local writes = {}
 local encoded
 local fail_encode = false
+local metadata_writes = 0
 
 package.preload["json"] = function()
     return {
@@ -38,7 +39,7 @@ local ui = {
     document = { getPageCount = function() return 100 end },
     annotation = { annotations = annotations },
     doc_settings = {
-        flush = function() end,
+        flush = function() metadata_writes = metadata_writes + 1 end,
         readSetting = function(_, key)
             return key == "annotations"
                 and { { datetime = "2026-08-19", text = "旧快照", page = 2 } }
@@ -56,6 +57,7 @@ Assert.eq(writes[1][1], "moon")
 Assert.eq(writes[1][2], "b'1")
 Assert.eq(writes[1][3], 2)
 Assert.eq(writes[1][4], "[snapshot]")
+Assert.eq(metadata_writes, 0, "Moon 快照落库不应提前写入 KOReader 的旧注解快照")
 
 fail_encode = true
 Note.save(ui, { source_id = "moon", stable_id = "b2" })

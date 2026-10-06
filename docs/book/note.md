@@ -6,6 +6,8 @@
 
 按书或按章保存 KOReader **注解完整快照**（JSON `payload`），不是增量 patch。上传只读 notes 表，避免异步发出已改内存表。
 
+`Note.save` 读取当前内存注解并同步落库，不提前 flush KOReader 文档设置中的旧快照。原生 `SaveSettings` / `FlushSettings` 仍负责文档元数据的最终持久化；云端回填后的 `applyLocal` 文档写入保留。
+
 | `chapter_idx` | 含义 |
 |---|---|
 | `0` | 整本桶 |
