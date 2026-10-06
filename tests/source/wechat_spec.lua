@@ -453,7 +453,7 @@ do
     fake_client.reportReadAsync = nil
 end
 
--- 阅读中按 30 秒节流冲刷本地脏统计：只走 syncStatsAsync(dirty_only)，窗口内翻页不重复触发。
+-- 阅读中按 5 分钟节流冲刷本地脏统计，期间继续保留本地待上传记录。
 do
     local src = WeChat.new()
     src.configured = function() return true end
@@ -464,9 +464,15 @@ do
     end
     src:onEvent("page_changed", {})
     src:onEvent("page_changed", {})
-    Assert.len(flushes, 1, "30 秒内翻页只冲刷一次")
+    Assert.len(flushes, 1, "窗口内翻页只冲刷一次")
     Assert.is_true(flushes[1].dirty_only)
     src._stats_flushed_at = os.time() - 30
+    src:onEvent("page_changed", {})
+    Assert.len(flushes, 1, "30 秒后不得上传")
+    src._stats_flushed_at = os.time() - 299
+    src:onEvent("page_changed", {})
+    Assert.len(flushes, 1, "5 分钟前不得上传")
+    src._stats_flushed_at = os.time() - 300
     src:onEvent("page_changed", {})
     Assert.len(flushes, 2, "过了节流窗口再冲刷")
 

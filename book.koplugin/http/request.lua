@@ -296,7 +296,7 @@ end
 ---@param cb fun(res: table|nil, err: any)
 ---@return HttpJob
 function Request.request(opts, cb)
-    if not NetworkMgr:isOnline() then
+    if not NetworkMgr:isConnected() then
         cb(nil, _("网络不可用，请先连接 Wi-Fi"))
         return { cancel = function() end }
     end
@@ -391,7 +391,7 @@ local function send(method, url, body, opts, cb)
         if cancelled then
             return
         end
-        if not NetworkMgr:isOnline() then
+        if not NetworkMgr:isConnected() then
             cb(nil, _("网络不可用，请先连接 Wi-Fi"))
             return
         end
@@ -485,7 +485,7 @@ end
 ---@param handlers HttpStreamHandlers|nil
 ---@return HttpJob
 function Request.stream(opts, handlers)
-    if not NetworkMgr:isOnline() then
+    if not NetworkMgr:isConnected() then
         if handlers and handlers.on_done then
             handlers.on_done(_("网络不可用，请先连接 Wi-Fi"))
         end
@@ -675,7 +675,7 @@ end
 ---@param cb fun(ok: boolean, err: any, res: table|nil)
 ---@return HttpJob
 function Request.download(opts, dest, cb)
-    if not NetworkMgr:isOnline() then
+    if not NetworkMgr:isConnected() then
         cb(false, _("网络不可用，请先连接 Wi-Fi"))
         return { cancel = function() end }
     end

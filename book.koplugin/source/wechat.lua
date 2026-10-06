@@ -82,8 +82,8 @@ end
 --- 删除：本地先标 deleted（书架立刻消失），能上网时再推云端真删。
 Source.deleteBookAsync = Shelf.deleteAsync
 
---- 阅读中时长推送间隔（秒），对齐网页端 / weread 的上报节奏。
-local STATS_FLUSH_INTERVAL = 30
+--- 阅读中时长推送间隔（秒），翻页只按五分钟批量推送。
+local STATS_FLUSH_INTERVAL = 5 * 60
 
 --- 章节开读即发「进入阅读」（putProgressAsync 就是 enter 上报）。
 --- 服务端只认距本会话上次上报的真实间隔：拖到推时长时才 enter，紧跟的 rt 会被当成 0 秒。

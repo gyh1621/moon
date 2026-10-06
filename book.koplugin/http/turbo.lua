@@ -43,33 +43,12 @@ local function patchSni(crypto)
 end
 
 -- LuaSocket connect 按主机名在 UI 线程同步 getaddrinfo，SSL 握手前还会再 connect 一次。
--- 设备上没有系统 DNS 缓存，10 路封面下载就是 20 次阻塞解析；这里按主机名缓存结果。
+-- 未缓存的 DNS 放到 fork worker，UI 线程只使用已解析地址。
 local DNS_TTL = 10 * 60
 local dns = {}
 
---- 主机名换成缓存地址；IP 字面量原样返回，解析失败交回 connect 报真实错误。
----@param host string
----@return string
-local function resolve(host)
-    if host:match("^[%d%.]+$") or host:find(":", 1, true) then
-        return host
-    end
-    local now = os.time()
-    local hit = dns[host]
-    if hit and hit.expires > now then
-        return hit.addr
-    end
-    local list = require("socket").dns.getaddrinfo(host)
-    local addr = list and list[1] and list[1].addr
-    if not addr then
-        return host
-    end
-    dns[host] = { addr = addr, expires = now + DNS_TTL }
-    return addr
-end
-
 --- `self._handle_connect_fail(err)` 点号调用会把 self 变成错误字符串。
---- 同时把主机名解析收口到 resolve。
+--- 解析完成后才连接；关闭流时取消仍在进行的 DNS worker。
 local function patchConnectFail()
     local ok, iostream = pcall(require, "turbo.iostream")
     local IOStream = ok and iostream and iostream.IOStream
@@ -79,7 +58,7 @@ local function patchConnectFail()
     if IOStream._book_connect_fail_patched then
         return
     end
-    local orig_connect, orig_fail = IOStream.connect, IOStream._handle_connect_fail
+    local orig_connect, orig_fail, orig_close = IOStream.connect, IOStream._handle_connect_fail, IOStream.close
     if type(orig_fail) ~= "function" then
         return
     end
@@ -90,7 +69,48 @@ local function patchConnectFail()
             end
             return orig_fail(first, second)
         end
-        return orig_connect(self, resolve(address), port, family, callback, fail_callback, arg)
+        if address:match("^[%d%.]+$") or address:find(":", 1, true) then
+            return orig_connect(self, address, port, family, callback, fail_callback, arg)
+        end
+        local hit = dns[address]
+        if hit and hit.expires > os.time() then
+            return orig_connect(self, hit.addr, port, family, callback, fail_callback, arg)
+        end
+        self._connect_fail_callback = fail_callback
+        self._connect_callback = callback
+        self._connect_callback_arg = arg
+        self._connecting = true
+        local wanted_family = family == require("turbo").socket.AF_INET6 and "inet6" or "inet"
+        local function fail(err)
+            self._book_dns_job = nil
+            if not self:closed() then self:_handle_connect_fail(err) end
+        end
+        self._book_dns_job = require("workers.job").run(function()
+            local list, err = require("socket").dns.getaddrinfo(address)
+            for _, entry in ipairs(list or {}) do
+                if entry.family == wanted_family then
+                    return { addr = entry.addr }
+                end
+            end
+            return { error = err or "DNS address not found" }
+        end, {
+            name = "http-dns", kind = "light", timeout = self.args and self.args.dns_timeout or 20,
+            on_done = function(result)
+                self._book_dns_job = nil
+                if self:closed() then return end
+                if not result.addr then fail(result.error); return end
+                dns[address] = { addr = result.addr, expires = os.time() + DNS_TTL }
+                orig_connect(self, result.addr, port, family, callback, fail_callback, arg)
+            end,
+            on_failed = fail,
+        })
+        return 0
+    end
+    IOStream.close = function(self)
+        local job = self._book_dns_job
+        self._book_dns_job = nil
+        if job then job:cancel() end
+        return orig_close(self)
     end
     IOStream._book_connect_fail_patched = true
 end

@@ -6,6 +6,8 @@
 
 全部外部 HTTP 经 Turbo 非阻塞回调。可取消句柄统一 `{ cancel }`。GET 的 `cache_ttl>0` 走 `http` 表；业务层（含 `online/`）不自己判新鲜度。
 
+请求入口只检查 `NetworkMgr:isConnected()`，不在 UI 线程调用会同步解析 DNS 的 `isOnline()`；已连 Wi-Fi 但无法访问互联网时，由异步 HTTP 返回错误。未缓存的主机名经 `workers.job` 的 `light` fork 任务解析，连接只接收解析后的 IP，原始 Host/SNI 不变。DNS 地址缓存十分钟，连接失败清除；关闭流同时取消 DNS 任务，迟到结果不再连接。
+
 ## 用法
 
 ```lua

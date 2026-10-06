@@ -3,7 +3,7 @@
 
 网页阅读页里的 psvts 只是出页时间的 encode，token 是固定默认值、pclts 为 0，
 所以本地按当前时间生成，不再下载阅读页（大书阅读页内嵌全书目录，可达数 MB）。
-reader 状态模拟一次网页阅读会话；超过 TTL 重新生成，并重新发进入阅读上报。
+reader 状态模拟一次网页阅读会话；闲置超过 TTL 重新生成，并重新发进入阅读上报。
 
 @module koplugin.book.source.wechat.context
 --]]
@@ -17,7 +17,7 @@ local READER_TTL = 15 * 60
 ---@class WechatReaderState
 ---@field psvts string
 ---@field pclts string
----@field at integer 生成时间
+---@field at integer 最后使用时间
 ---@field entered boolean|nil 本会话已发过进入阅读上报
 
 ---@type table<string, WechatReaderState>
@@ -29,7 +29,7 @@ local function key(book_id, chapter_uid)
     return tostring(book_id) .. "\31" .. tostring(chapter_uid)
 end
 
---- 该章未过期的 reader 状态，缺失或过期就地生成。
+--- 该章未过期的 reader 状态，活跃使用续期，闲置过期后重新生成。
 --- psvts 模拟服务端出页时间，pclts 模拟稍后的页面初始化时间；两者在会话内固定：进入阅读与后续时长上报必须共用同一个 pc，每次现算会让服务端不认 rt。
 ---@param book_id string
 ---@param chapter_uid string|number
@@ -38,7 +38,10 @@ function Context.reader(book_id, chapter_uid)
     local k = key(book_id, chapter_uid)
     local state = readers[k]
     local now = os.time()
-    if state and now - state.at < READER_TTL then return state end
+    if state and now - state.at < READER_TTL then
+        state.at = now
+        return state
+    end
     state = { psvts = Protocol.encode(now - 1), pclts = Protocol.encode(now), at = now }
     readers[k] = state
     return state

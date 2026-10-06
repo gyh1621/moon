@@ -289,6 +289,34 @@ do
     current_resume_plugin = nil
 end
 
+-- suspend 必须结清最后一页并上传，不能被阅读中的周期窗口挡住；唤醒后仍可关书上传。
+do
+    local flushes = {}
+    resolved_source = setmetatable({
+        syncStatsAsync = function(_, opts, cb)
+            flushes[#flushes + 1] = opts
+            cb({})
+        end,
+    }, { __index = default_source })
+    local plugin, emitted = mkPlugin("/x/book.epub")
+    Session.onReaderReady(plugin)
+    flushes = {}
+    defer_tracker_stop = true
+    Session.onPause(plugin)
+    Assert.len(flushes, 0, "最后一页尚未结清时不能推送")
+    defer_tracker_stop = false
+    tracker_stop_done()
+    Assert.len(flushes, 1, "suspend 必须推送最后一批")
+    Assert.is_true(flushes[1].dirty_only)
+    Assert.eq(emitted[#emitted].ev, "suspend")
+    current_resume_plugin = plugin
+    Session.onResume(plugin)
+    current_resume_plugin = nil
+    Session.onCloseDocument(plugin)
+    Assert.len(flushes, 2, "恢复后关书仍可推送")
+    resolved_source = nil
+end
+
 -- 首次路径由源解析；Session 只接管 ReaderReady 交接和后续切章。
 do
     local callback

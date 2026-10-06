@@ -39,6 +39,18 @@ do
     Assert.eq(enter.ps, read.ps)
 end
 
+-- 持续每 5 分钟上报：活跃会话不能在累计 15 分钟时重建，否则 enter 后的 rt 不计。
+do
+    Context.clear()
+    local reader = Context.reader("b1", "c1")
+    reader.entered = true
+    for _ = 1, 4 do
+        now = now + 300
+        Assert.is_true(Context.reader("b1", "c1") == reader, "活跃的五分钟上报必须复用阅读会话")
+        Assert.is_true(reader.entered)
+    end
+end
+
 -- 按章隔离；过 TTL 重建，entered 清掉以重新发进入阅读。
 do
     Context.clear()

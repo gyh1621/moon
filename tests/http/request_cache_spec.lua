@@ -24,7 +24,7 @@ package.preload["http.cache"] = function()
     }
 end
 package.preload["ui/network/manager"] = function()
-    return { isOnline = function() return true end }
+    return { isConnected = function() return true end }
 end
 package.preload["http.header"] = function()
     return { forRequest = function() return {} end }

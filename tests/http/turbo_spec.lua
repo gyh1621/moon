@@ -19,6 +19,7 @@ do
     package.preload["turbo"] = function()
         return {
             log = { categories = {} },
+            socket = { AF_INET6 = 10 },
             async = { HTTPClient = HTTPClient },
             ioloop = {
                 IOLoop = function()
@@ -37,6 +38,20 @@ do
             end,
         }
     end
+    local pending = {}
+    package.loaded["workers.job"] = nil
+    package.preload["workers.job"] = function() return { run = function(worker, opts)
+        local job = { worker = worker, opts = opts }
+        function job:cancel() self.cancelled = true end
+        pending[#pending + 1] = job
+        return job
+    end } end
+    local function completeDNS()
+        local job = table.remove(pending, 1)
+        Assert.not_nil(job, "DNS must be scheduled off the UI thread")
+        if not job.cancelled then job.opts.on_done(job.worker()) end
+        return job
+    end
     local lookups = {}
     package.preload["socket"] = function()
         return { dns = { getaddrinfo = function(host)
@@ -51,6 +66,8 @@ do
             self.fail_self = self
             self.fail_err = err
         end
+        function IOStream:closed() return self.closed_flag == true end
+        function IOStream:close() self.closed_flag = true end
         function IOStream:connect(address)
             self.connected_to = address
             if self.should_fail then
@@ -82,39 +99,58 @@ do
     Assert.eq(handshake_calls, 4)
 
     local iostream = require("turbo.iostream")
-    local fail_stream = { should_fail = true }
+    local function newStream(fields)
+        return setmetatable(fields or {}, { __index = iostream.IOStream })
+    end
+    local fail_stream = newStream({ should_fail = true })
     iostream.IOStream.connect(fail_stream, "example.com", 443)
+    completeDNS()
     Assert.eq(fail_stream.fail_err, "Network is unreachable")
     Assert.eq(fail_stream.fail_self, fail_stream)
 
-    -- 同一主机只在 UI 线程解析一次；IP 字面量不解析；连接失败丢缓存重解析。
+    -- 未缓存 DNS 必须在 worker 中解析，连接在解析完成后继续。
     lookups = {}
-    local a, b = {}, {}
+    local a, b = newStream(), newStream()
     iostream.IOStream.connect(a, "cdn.example.com", 443)
+    Assert.eq(#lookups, 0, "connect 不得在 UI 线程解析 DNS")
+    Assert.is_nil(a.connected_to, "解析期间不得建立连接")
+    completeDNS()
     iostream.IOStream.connect(b, "cdn.example.com", 443)
     Assert.eq(#lookups, 1, "同主机第二次连接必须命中缓存")
     Assert.eq(a.connected_to, "10.0.0.1")
     Assert.eq(b.connected_to, "10.0.0.1")
-    iostream.IOStream.connect({}, "1.2.3.4", 443)
-    iostream.IOStream.connect({}, "2001:db8::1", 443)
+    iostream.IOStream.connect(newStream(), "1.2.3.4", 443)
+    iostream.IOStream.connect(newStream(), "2001:db8::1", 443)
     Assert.eq(#lookups, 1, "IP 字面量不得解析")
     -- 同步失败：iostream 经 run_callback 调 HTTPClient:_handle_connect_fail(client, err)
     HTTPClient._handle_connect_fail({ hostname = "cdn.example.com" }, "Network is unreachable")
     Assert.eq(client_fail_msgs[1], "Could not connect: Network is unreachable")
-    local c = {}
+    local c = newStream()
     iostream.IOStream.connect(c, "cdn.example.com", 443)
+    completeDNS()
     Assert.eq(#lookups, 2, "连接失败后必须重新解析")
     Assert.eq(c.connected_to, "10.0.0.2")
     -- LuaSocket 异步失败回调 (client, -1, err)：用真实错误，同样丢缓存
     HTTPClient._handle_connect_fail({ hostname = "cdn.example.com" }, -1, "connection refused")
     Assert.eq(client_fail_msgs[2], "Could not connect: connection refused")
-    iostream.IOStream.connect({}, "cdn.example.com", 443)
+    iostream.IOStream.connect(newStream(), "cdn.example.com", 443)
+    completeDNS()
     Assert.eq(#lookups, 3, "异步连接失败后也必须重新解析")
     HTTPClient._handle_connect_fail({ hostname = "cdn.example.com" }, -1)
     Assert.eq(client_fail_msgs[3], "Could not connect: -1", "无真实错误时保留原样")
-    local nx = {}
+    local nx = newStream()
     iostream.IOStream.connect(nx, "nx.invalid", 443)
-    Assert.eq(nx.connected_to, "nx.invalid", "解析失败交回 connect 报真实错误")
+    completeDNS()
+    Assert.is_nil(nx.connected_to, "解析失败不得回到 UI 线程同步解析")
+    Assert.matches(nx.fail_err, "host not found")
+    local cancelled = newStream()
+    iostream.IOStream.connect(cancelled, "cancel.example.com", 443)
+    local cancelled_job = pending[1]
+    iostream.IOStream.close(cancelled)
+    Assert.is_true(cancelled_job.cancelled, "关闭连接必须取消 DNS worker")
+    completeDNS()
+    cancelled_job.opts.on_done({ addr = "10.0.0.99" })
+    Assert.is_nil(cancelled.connected_to, "迟到的 DNS 结果不得复活关闭的连接")
     local ffi = require("ffi")
     local sized = {
         _read_buffer_size = ffi.new("int64_t", 16),
@@ -127,7 +163,7 @@ do
     Assert.eq(type(got_bytes), "number")
     Turbo.release()
 
-    for _, name in ipairs({ "turbo", "turbo.crypto", "turbo.iostream", "socket" }) do
+    for _, name in ipairs({ "turbo", "turbo.crypto", "turbo.iostream", "socket", "workers.job" }) do
         package.preload[name] = nil
         package.loaded[name] = nil
     end

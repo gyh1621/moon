@@ -14,7 +14,8 @@ local network_connected = true
 package.loaded["ui/network/manager"] = nil
 package.preload["ui/network/manager"] = function()
     return {
-        isOnline = function() return network_connected end,
+        isConnected = function() return network_connected end,
+        isOnline = function() error("请求不得在 UI 线程探测 DNS") end,
     }
 end
 
@@ -385,7 +386,7 @@ do
     -- LuaSocket 点号调用必须把流对象补回去，否则离线开书会炸 iostream.lua:476
     local iostream = require("turbo.iostream")
     local fail_stream = {}
-    iostream.IOStream.connect(fail_stream, "example.com", 443)
+    iostream.IOStream.connect(fail_stream, "127.0.0.1", 443)
     Assert.eq(fail_stream.fail_err, "Network is unreachable")
     Assert.eq(fail_stream.fail_self, fail_stream)
     fail_stream.fail_err = nil
@@ -483,4 +484,3 @@ do
     Request.request({ url = "http://127.0.0.1:8088/books/", auth_username = "" }, function() end)
     Assert.is_nil(sent.Authorization)
 end
-
