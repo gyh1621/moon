@@ -1,6 +1,6 @@
 require("l10n").apply()
 
-local Diagnostics = require("diagnostics")
+local Diagnostics = require("diagnostics.init")
 local InfoMessage = require("ui/widget/infomessage")
 local InputDialog = require("ui/widget/inputdialog")
 local SettingRow = require("ui.components.settingrow")

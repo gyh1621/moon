@@ -16,7 +16,7 @@ package.preload["ui.components.settingrow"] = function() return { build = functi
 package.preload["utils.settings"] = function() return {
     get = function() return cfg end, saveSection = function(section) saved = section end,
 } end
-package.preload["diagnostics"] = function() return { upload = function(cb) calls[#calls + 1] = cb end } end
+package.preload["diagnostics.init"] = function() return { upload = function(cb) calls[#calls + 1] = cb end } end
 local desktop = { lifecycle = { state = "Resume" }, updateView = function() updated = updated + 1 end }
 local UI = require("ui.desktop.settings.diagnostics")
 local rows = UI:rows(desktop)
