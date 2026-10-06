@@ -33,6 +33,7 @@ local Language = require("ui.desktop.settings.language")
 local QuickPanel = require("ui.panel.settings")
 local Maintenance = require("ui.desktop.settings.maintenance")
 local AISettings = require("ui.desktop.settings.ai")
+local DiagnosticsUI = require("ui.desktop.settings.diagnostics")
 local ReaderSettings = require("ui.desktop.settings.reader")
 local ReaderBarSettings = require("ui.desktop.settings.reader_bar")
 
@@ -228,6 +229,14 @@ function Settings:spec(id)
             end,
         }
     end
+    if id == "diagnostics" then
+        return {
+            id = id, title = _("诊断报告"),
+            sections = function()
+                return {{ title = "gyh1621/moon-diagnostics", rows = DiagnosticsUI:rows(desktop) }}
+            end,
+        }
+    end
     if id == "remote" then
         return {
             id = id,
@@ -370,6 +379,10 @@ function Settings:createWidget()
         Maintenance:debugLogRow(desktop),
         Maintenance:autoUpdateRow(desktop),
         Maintenance:updateRow(desktop),
+        featureRow(desktop, {
+            id = "diagnostics", icon = "upload", title = _("诊断报告"),
+            subtitle = _("上传日志与电池统计到私有问题仓库"),
+        }),
         Maintenance:aboutRow(),
         Maintenance:closeRow(desktop),
     })

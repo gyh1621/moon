@@ -107,6 +107,9 @@ end
 package.preload["ui.desktop.settings.ai"] = function()
     return { rows = function() return {} end }
 end
+package.preload["ui.desktop.settings.diagnostics"] = function()
+    return { rows = function() return {} end }
+end
 package.preload["ui.desktop.settings.overlay"] = function()
     return {
         appendSection = function() end,

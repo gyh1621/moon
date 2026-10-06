@@ -133,6 +133,9 @@ end
 package.preload["ui.desktop.settings.ai"] = function()
     return { rows = function() return {} end }
 end
+package.preload["ui.desktop.settings.diagnostics"] = function()
+    return { rows = function() return {} end }
+end
 package.preload["ui.desktop.settings.reader"] = function()
     return {
         sections = function() return { { title = "行为", rows = {} } } end,
@@ -196,7 +199,7 @@ local desktop = {
 local settings = require("ui.desktop.settings"):new{ desktop = desktop }
 desktop.settings = settings
 settings:updateView()
-Assert.len(built_rows, 22)
+Assert.len(built_rows, 23)
 
 local expected = {
     { title = "书籍来源", id = "sources" },
@@ -214,6 +217,7 @@ local expected = {
     { title = "语言与输入法", id = "language" },
     { title = "AI 接口", id = "ai" },
     { title = "远程管理", id = "remote" },
+    { title = "诊断报告", id = "diagnostics" },
 }
 local nav = 1
 for _, row in ipairs(built_rows) do
@@ -258,6 +262,8 @@ Assert.eq(#lookup.sections(), 1)
 local display = settings:spec("display")
 Assert.eq(display.title, "界面显示")
 Assert.is_nil(display.preview)
+Assert.eq(settings:spec("diagnostics").title, "诊断报告")
+Assert.len(settings:spec("diagnostics").sections(), 1)
 
 _G.G_reader_settings = previous_settings
 

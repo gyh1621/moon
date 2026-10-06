@@ -127,11 +127,12 @@ local DEFAULTS = {
         home_recent_list_show_title = true,
     },
     ai = { ai_endpoint = "", ai_api_key = "", ai_model = "" },
+    diagnostics = { github_issue_token = "" },
 }
 
 local SECTIONS = {
     "common", "display", "lockscreen", "remote", "maintenance",
-    "pinyin", "quickpanel", "reader", "home", "ai",
+    "pinyin", "quickpanel", "reader", "home", "ai", "diagnostics",
 }
 local KEY_SECTION = {}
 for section, defaults in pairs(DEFAULTS) do
