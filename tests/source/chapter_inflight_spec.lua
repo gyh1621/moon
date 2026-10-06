@@ -6,7 +6,7 @@ package.preload["book.store"] = function()
     return { touch = function() return true end }
 end
 package.preload["ui/network/manager"] = function()
-    return { runWhenOnline = function(_, cb) cb() end }
+    return { runWhenConnected = function(_, cb) cb() end }
 end
 local Chapter = require("source.chapter")
 local identity = { source_id = "wechat", stable_id = "inflight-regression" }

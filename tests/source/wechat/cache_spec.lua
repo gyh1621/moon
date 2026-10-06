@@ -31,7 +31,7 @@ package.preload["book.store"] = function()
 end
 package.preload["ui/network/manager"] = function()
     return {
-        runWhenOnline = function(_, cb) cb() end,
+        runWhenConnected = function(_, cb) cb() end,
         isOnline = function() return false end,
         isConnected = function() return true end,
     }

@@ -23,6 +23,8 @@
 
 本地缓存命中快开时仍须 `touch`——旧文件可能早于 chapters 表。切章快开不做后台重复 `openAsync`，避免 UI 线程扫 HTML。
 
+章节打开和预取不使用同步 DNS 探测的 `isOnline` / `runWhenOnline`。预取逐章先检查完整缓存，命中时离线也能完成；只有需要下载时才经 `runWhenConnected` 检查连接并保留 KOReader 的 Wi-Fi 连接提示。未缓存章节打开（含拷贝漫画的独立入口）也只走连接检查；已连接但 DNS/WAN 不可用时，由异步 HTTP 返回错误，关闭准备框并交付失败。取消后连接完成或请求迟到回调不能交付结果。
+
 工作目录：`Paths.bookWorkDir(stable_id, source_id)`（`md5(stable_id)`，因 id 可能含斜杠）。
 
 ---

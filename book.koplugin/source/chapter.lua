@@ -433,14 +433,7 @@ function Chapter.openWithUi(source, identity, book, opts, ops, cb)
         current:close()
     end
     local NetworkMgr = require("ui/network/manager")
-    -- 已连接但不在线时 runWhenOnline 永远不回调，这里直接失败给出提示。
-    if not NetworkMgr:isOnline() and NetworkMgr:isConnected() then
-        require("ui/uimanager"):nextTick(function()
-            if not cancelled then cb(nil, _("网络不可用，请先连接 Wi-Fi")) end
-        end)
-        return { cancel = function() cancelled = true end }
-    end
-    NetworkMgr:runWhenOnline(function()
+    NetworkMgr:runWhenConnected(function()
         if cancelled then
             return
         end
@@ -564,37 +557,37 @@ function Chapter.prefetchAsync(identity, book, toc, from_idx, count, ops, cb)
             failed(_("章节信息缺失") .. " #" .. tostring(idx))
             return
         end
-        local operation = {}
-        active = operation
-        operation.job = materialize(path, identity, item, ops, function(wpath, err)
-            if cancelled or active ~= operation then return end
-            active = nil
-            if not wpath then
-                failed(err or (_("章节保存失败") .. " #" .. tostring(idx)))
-                return
-            end
-            local store_opts = { chapter_idx = idx }
-            if ops.persist_toc ~= false then store_opts.toc = toc end
-            if ops.persist_book ~= false then store_opts.book = book end
-            local touched, touch_err = require("book.store").touch(wpath, identity, store_opts)
-            if not touched then
-                failed(touch_err)
-                return
-            end
-            if not chapterReady(wpath) then
-                failed(_("章节下载失败") .. " #" .. tostring(idx))
-                return
-            end
-            cached_count = cached_count + 1
-            report()
-            continueNext()
-        end, { yield_write = true })
+        require("ui/network/manager"):runWhenConnected(function()
+            if cancelled then return end
+            local operation = {}
+            active = operation
+            operation.job = materialize(path, identity, item, ops, function(wpath, err)
+                if cancelled or active ~= operation then return end
+                active = nil
+                if not wpath then
+                    failed(err or (_("章节保存失败") .. " #" .. tostring(idx)))
+                    return
+                end
+                local store_opts = { chapter_idx = idx }
+                if ops.persist_toc ~= false then store_opts.toc = toc end
+                if ops.persist_book ~= false then store_opts.book = book end
+                local touched, touch_err = require("book.store").touch(wpath, identity, store_opts)
+                if not touched then
+                    failed(touch_err)
+                    return
+                end
+                if not chapterReady(wpath) then
+                    failed(_("章节下载失败") .. " #" .. tostring(idx))
+                    return
+                end
+                cached_count = cached_count + 1
+                report()
+                continueNext()
+            end, { yield_write = true })
+        end)
     end
 
-    require("ui/network/manager"):runWhenOnline(function()
-        if cancelled then return end
-        nextIndex()
-    end)
+    nextIndex()
     return { cancel = function()
             cancelled = true
             local job = active and active.job

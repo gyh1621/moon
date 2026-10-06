@@ -49,13 +49,23 @@ package.preload["book.store"] = function()
         return true
     end }
 end
-local network = { online = true, connected = true, waited = 0 }
+local network = { online = true, connected = true, waited = 0, probes = 0 }
 package.preload["ui/network/manager"] = function()
     return {
-        isOnline = function() return network.online end,
+        isOnline = function()
+            network.probes = network.probes + 1
+            return network.online
+        end,
         isConnected = function() return network.connected end,
         runWhenOnline = function(_, fn)
+            network.probes = network.probes + 1
             if network.online then fn() else network.waited = network.waited + 1 end
+        end,
+        runWhenConnected = function(_, fn)
+            if network.connected then fn() else
+                network.waited = network.waited + 1
+                network.resume = fn
+            end
         end,
     }
 end
@@ -145,6 +155,32 @@ Assert.eq(offline_cached_path, tmp .. "/2.html")
 Assert.eq(remote_n, 0)
 Assert.eq(progress_ui.shown, 0)
 network.online = true
+
+-- 完整缓存的预取在离线时也完成，不做 DNS 探测或弹连接提示。
+for i = 1, 3 do
+    local cached = assert(io.open(tmp .. "/" .. i .. ".html", "wb"))
+    cached:write("<html><body>Cached chapter " .. i .. "</body></html>")
+    cached:close()
+end
+network.online = false
+network.connected = false
+local cached_count, cached_total, cached_failed
+local probes_before, waited_before = network.probes, network.waited
+Chapter.prefetchAsync(identity, {}, toc, 0, 3, {
+    fetchContent = function() error("cached prefetch fetched content") end,
+}, function(done, total, failed)
+    cached_count, cached_total, cached_failed = done, total, failed
+end)
+Stubs.flush()
+Assert.eq(cached_count, 3)
+Assert.eq(cached_total, 3)
+Assert.eq(cached_failed, 0)
+Assert.eq(network.probes, probes_before)
+Assert.eq(network.waited, waited_before)
+network.online = true
+network.connected = true
+os.remove(tmp .. "/1.html")
+os.remove(tmp .. "/3.html")
 
 -- 未指定章时优先使用本地 pending_progress。
 pending = { chapter_idx = 3 }
@@ -270,19 +306,67 @@ Assert.is_nil(failed_path)
 Assert.eq(failed_err, "register failed")
 touch_error = nil
 
--- 已连接但不在线：runWhenOnline 不会回调，必须直接失败给出提示而不是静默挂起。
+-- 已连接但 DNS/WAN 不可用：打开先返回，HTTP 异步失败关闭对话框并交付错误。
 network.online = false
 progress_ui.shown = 0
 os.remove(tmp .. "/2.html")
 local offline_path, offline_err
-Chapter.openWithUi({ type = "chapter" }, identity, {}, { chapter_idx = 2 }, ops,
+local download_callback
+probes_before = network.probes
+waited_before = network.waited
+Chapter.openWithUi({ type = "chapter" }, identity, {}, { chapter_idx = 2 }, {
+    loadToc = ops.loadToc,
+    fetchContent = function(_, _, done) download_callback = done end,
+},
     function(p, err) offline_path, offline_err = p, err end)
+Assert.eq(network.probes, probes_before, "opening must not resolve availability DNS")
+Assert.eq(network.waited, waited_before)
+Assert.eq(progress_ui.shown, 1)
+Assert.not_nil(download_callback)
+Assert.is_nil(offline_err)
+download_callback(nil, "DNS lookup failed")
+Assert.is_nil(offline_err)
 Stubs.flush()
 Assert.is_nil(offline_path)
-Assert.not_nil(offline_err)
-Assert.eq(network.waited, 0)
-Assert.eq(progress_ui.shown, 0)
+Assert.eq(offline_err, "DNS lookup failed")
 network.online = true
+
+-- 未缓存章节在线下载也不做重复在线探测；HTTP 成功后照常登记并异步交付。
+probes_before = network.probes
+local downloaded_path
+Chapter.openWithUi({}, identity, {}, { chapter_idx = 2 }, ops,
+    function(p) downloaded_path = p end)
+Assert.eq(network.probes, probes_before)
+Assert.is_nil(downloaded_path)
+Stubs.flush()
+Assert.eq(downloaded_path, tmp .. "/2.html")
+Assert.eq(touches[#touches].chapter_idx, 2)
+
+-- 下载需要连接时保留 Wi-Fi 提示；取消后连接回调不能再开始下载。
+os.remove(tmp .. "/2.html")
+network.connected = false
+local fetch_count_before = #fetched
+local waiting = Chapter.openWithUi({}, identity, {}, { chapter_idx = 2 }, ops,
+    function() error("cancelled connection delivered a chapter") end)
+Assert.eq(network.waited, waited_before + 1)
+Assert.eq(#fetched, fetch_count_before)
+waiting.cancel()
+network.connected = true
+network.resume()
+Stubs.flush()
+Assert.eq(#fetched, fetch_count_before)
+
+-- 正常连接完成后恢复下载，仍保持异步交付。
+network.connected = false
+local resumed_path
+Chapter.openWithUi({}, identity, {}, { chapter_idx = 2 }, ops,
+    function(p) resumed_path = p end)
+Assert.eq(network.waited, waited_before + 2)
+network.connected = true
+network.resume()
+Assert.is_nil(resumed_path)
+Stubs.flush()
+Assert.eq(resumed_path, tmp .. "/2.html")
 
 -- 预取：已有文件跳过，只拉取缺失章。
 os.remove(tmp .. "/2.html")
